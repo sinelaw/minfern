@@ -1,0 +1,491 @@
+//! Inference state management.
+//!
+//! This module provides the `InferState` struct which tracks:
+//! - Fresh variable generation
+//! - Current substitution
+//! - Named recursive type definitions
+//! - Pending type class constraints
+
+use std::collections::HashMap;
+
+use crate::error::TypeOrigin;
+use crate::lexer::Span;
+use crate::types::{
+    ClassName, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef, TypeId, TypePred,
+    TypeScheme,
+};
+
+/// Type class definition with instances.
+#[derive(Debug, Clone)]
+pub struct TypeClass {
+    pub name: ClassName,
+    pub instances: Vec<TypeScheme>,
+}
+
+/// A pending constraint that needs to be resolved.
+#[derive(Debug, Clone)]
+pub struct PendingConstraint {
+    pub pred: TypePred,
+    pub span: Span,
+}
+
+/// Inference state tracking type variables, substitution, and constraints.
+pub struct InferState {
+    /// Counter for generating fresh type variables.
+    name_source: TVarId,
+
+    /// Current substitution from unification.
+    pub main_subst: Subst,
+
+    /// Named type definitions for recursive types.
+    pub named_types: HashMap<TypeId, TypeDef>,
+
+    /// Counter for generating fresh type IDs.
+    type_id_source: TypeId,
+
+    /// Type class definitions.
+    pub type_classes: HashMap<ClassName, TypeClass>,
+
+    /// Pending type class constraints to resolve.
+    pub pending_constraints: Vec<PendingConstraint>,
+
+    /// Inferred types for declarations, keyed by span start position.
+    /// Used for decorating the AST with type annotations.
+    pub decl_types: HashMap<usize, Type>,
+
+    /// Type origins for error reporting.
+    pub type_origins: HashMap<TVarName, TypeOrigin>,
+}
+
+impl Default for InferState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InferState {
+    /// Create a new inference state.
+    pub fn new() -> Self {
+        InferState {
+            name_source: 0,
+            main_subst: Subst::empty(),
+            named_types: HashMap::new(),
+            type_id_source: 0,
+            type_classes: HashMap::new(),
+            pending_constraints: Vec::new(),
+            decl_types: HashMap::new(),
+            type_origins: HashMap::new(),
+        }
+    }
+
+    /// Record the origin of a type variable (only if higher priority than existing)
+    pub fn record_origin(&mut self, var: TVarName, origin: TypeOrigin) {
+        self.type_origins
+            .entry(var)
+            .and_modify(|existing| {
+                if origin.priority() > existing.priority() {
+                    *existing = origin.clone();
+                }
+            })
+            .or_insert(origin);
+    }
+
+    /// Get the origin of a type
+    pub fn get_origin(&self, ty: &Type) -> Option<&TypeOrigin> {
+        if let Type::Var(var) = ty {
+            self.type_origins.get(var)
+        } else {
+            // For non-variable types, look for origins in contained type variables
+            self.find_origin_in_type(ty)
+        }
+    }
+
+    /// Find an origin by looking through the type structure
+    fn find_origin_in_type(&self, ty: &Type) -> Option<&TypeOrigin> {
+        match ty {
+            Type::Var(var) => self.type_origins.get(var),
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => this_type
+                .as_ref()
+                .and_then(|t| self.find_origin_in_type(t))
+                .or_else(|| params.iter().find_map(|p| self.find_origin_in_type(p)))
+                .or_else(|| self.find_origin_in_type(ret)),
+            Type::Row(row) => row
+                .props
+                .values()
+                .find_map(|t| self.find_origin_in_type(t))
+                .or_else(|| {
+                    if let RowTail::Open(var) = &row.tail {
+                        self.type_origins.get(var)
+                    } else {
+                        None
+                    }
+                }),
+            Type::Array(elem) => self.find_origin_in_type(elem),
+            Type::Map(value) => self.find_origin_in_type(value),
+            Type::Named(_, args) => args.iter().find_map(|a| self.find_origin_in_type(a)),
+            _ => None,
+        }
+    }
+
+    /// Get a human-readable name for a type based on its origin
+    pub fn type_name_from_origin(&self, ty: &Type) -> Option<String> {
+        self.get_origin(ty).map(|origin| match origin {
+            TypeOrigin::Variable { name, .. } => format!("typeof({})", name),
+            TypeOrigin::Parameter { param_name, .. } => format!("typeof({})", param_name),
+            TypeOrigin::PropertyAccess { property, .. } => format!("typeof(.{})", property),
+            TypeOrigin::Literal { value, .. } => format!("typeof({})", value),
+            _ => origin.description(),
+        })
+    }
+
+    /// Record an inferred type for a declaration at the given span.
+    pub fn record_decl_type(&mut self, span: Span, ty: Type) {
+        self.decl_types.insert(span.start, ty);
+    }
+
+    /// Look up the inferred type for a declaration by span.
+    pub fn get_decl_type(&self, span: Span) -> Option<&Type> {
+        self.decl_types.get(&span.start)
+    }
+
+    /// Generate a fresh flexible type variable.
+    pub fn fresh_flex(&mut self) -> TVarName {
+        let id = self.name_source;
+        self.name_source += 1;
+        TVarName::Flex(id)
+    }
+
+    /// Generate a fresh skolem (rigid) type variable.
+    pub fn fresh_skolem(&mut self) -> TVarName {
+        let id = self.name_source;
+        self.name_source += 1;
+        TVarName::Skolem(id)
+    }
+
+    /// Generate a fresh type variable (as a Type).
+    pub fn fresh_type_var(&mut self) -> Type {
+        Type::Var(self.fresh_flex())
+    }
+
+    /// Get the next type variable ID (for type annotation parsing).
+    pub fn next_var_id(&self) -> u32 {
+        self.name_source
+    }
+
+    /// Generate a fresh type ID for recursive types.
+    pub fn fresh_type_id(&mut self) -> TypeId {
+        let id = self.type_id_source;
+        self.type_id_source += 1;
+        id
+    }
+
+    /// Apply the current substitution to a type.
+    pub fn apply_subst<T: Substitutable>(&self, t: &T) -> T {
+        self.main_subst.apply(t)
+    }
+
+    /// Extend the substitution with a new binding.
+    pub fn extend_subst(&mut self, var: TVarName, ty: Type) {
+        let singleton = Subst::singleton(var, ty);
+        self.main_subst = singleton.compose(&self.main_subst);
+    }
+
+    /// Override a type variable binding in the substitution.
+    /// Unlike extend_subst, this replaces any existing binding for the variable.
+    /// Used when we discover a more specific type for a variable that was
+    /// previously bound to a less specific type (e.g., Row -> Array).
+    pub fn rebind_var(&mut self, var: TVarName, ty: Type) {
+        self.main_subst.insert(var, ty);
+    }
+
+    /// Register a named type definition.
+    pub fn register_named_type(&mut self, def: TypeDef) {
+        self.named_types.insert(def.id, def);
+    }
+
+    /// Look up a named type definition.
+    pub fn get_named_type(&self, id: TypeId) -> Option<&TypeDef> {
+        self.named_types.get(&id)
+    }
+
+    /// Unroll a named recursive type by substituting its definition.
+    pub fn unroll_named(&self, id: TypeId, args: &[Type]) -> Option<Type> {
+        let def = self.named_types.get(&id)?;
+
+        // Create substitution from params to args
+        let mut subst = Subst::empty();
+        for (param, arg) in def.params.iter().zip(args.iter()) {
+            subst.insert(param.clone(), arg.clone());
+        }
+
+        Some(subst.apply(&def.body))
+    }
+
+    /// Add a pending constraint.
+    pub fn add_constraint(&mut self, pred: TypePred, span: Span) {
+        self.pending_constraints
+            .push(PendingConstraint { pred, span });
+    }
+
+    /// Register a type class.
+    pub fn register_type_class(&mut self, class: TypeClass) {
+        self.type_classes.insert(class.name.clone(), class);
+    }
+
+    /// Instantiate a type scheme with fresh flexible variables.
+    pub fn instantiate(&mut self, scheme: &TypeScheme) -> Type {
+        if scheme.is_mono() {
+            return scheme.body.ty.clone();
+        }
+
+        let mut subst = Subst::empty();
+        for var in &scheme.vars {
+            let fresh = self.fresh_type_var();
+            subst.insert(var.clone(), fresh);
+        }
+
+        // Also instantiate predicates as pending constraints
+        for pred in &scheme.body.preds {
+            let instantiated_pred = subst.apply(pred);
+            // Note: We'd need a span here, for now we use a dummy
+            self.pending_constraints.push(PendingConstraint {
+                pred: instantiated_pred,
+                span: Span::new(0, 0),
+            });
+        }
+
+        subst.apply(&scheme.body.ty)
+    }
+
+    /// Skolemize a type scheme (for subsumption checking).
+    /// Returns the skolem variables and the body type.
+    pub fn skolemize(&mut self, scheme: &TypeScheme) -> (Vec<TVarName>, Type) {
+        if scheme.is_mono() {
+            return (vec![], scheme.body.ty.clone());
+        }
+
+        let mut skolems = Vec::new();
+        let mut subst = Subst::empty();
+
+        for var in &scheme.vars {
+            let skolem = self.fresh_skolem();
+            skolems.push(skolem.clone());
+            subst.insert(var.clone(), Type::Var(skolem));
+        }
+
+        (skolems, subst.apply(&scheme.body.ty))
+    }
+
+    /// Generalize a type over free variables not in the environment.
+    /// Also collects relevant predicates from pending_constraints.
+    pub fn generalize(
+        &mut self,
+        env_free_vars: &std::collections::HashSet<TVarName>,
+        ty: &Type,
+    ) -> TypeScheme {
+        let ty = self.apply_subst(ty);
+        let ty_vars = ty.free_vars();
+
+        let gen_vars: Vec<TVarName> = ty_vars
+            .into_iter()
+            .filter(|v| !env_free_vars.contains(v) && v.is_flex())
+            .collect();
+
+        if gen_vars.is_empty() {
+            TypeScheme::mono(ty)
+        } else {
+            // Collect predicates that involve the generalized variables
+            let gen_var_set: std::collections::HashSet<_> = gen_vars.iter().cloned().collect();
+            let mut scheme_preds = Vec::new();
+            let mut remaining_constraints = Vec::new();
+
+            for constraint in std::mem::take(&mut self.pending_constraints) {
+                let pred = self.apply_subst_pred(&constraint.pred);
+                let pred_vars = pred.free_vars();
+
+                // If the predicate involves any generalized variable, include it in the scheme
+                if pred_vars.iter().any(|v| gen_var_set.contains(v)) {
+                    scheme_preds.push(pred);
+                } else {
+                    remaining_constraints.push(constraint);
+                }
+            }
+            self.pending_constraints = remaining_constraints;
+
+            TypeScheme::qualified(gen_vars, scheme_preds, ty)
+        }
+    }
+
+    /// Apply substitution to a predicate.
+    fn apply_subst_pred(&self, pred: &TypePred) -> TypePred {
+        TypePred {
+            class: pred.class.clone(),
+            types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
+        }
+    }
+
+    /// Check if a type variable occurs in a type (occurs check).
+    pub fn occurs_in(&self, var: TVarId, ty: &Type) -> bool {
+        let ty = self.apply_subst(ty);
+        self.occurs_in_impl(var, &ty)
+    }
+
+    fn occurs_in_impl(&self, var: TVarId, ty: &Type) -> bool {
+        match ty {
+            Type::Number
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Regex => false,
+
+            Type::Var(TVarName::Flex(id)) => *id == var,
+            Type::Var(TVarName::Skolem(_)) => false,
+
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                this_type
+                    .as_ref()
+                    .map_or(false, |t| self.occurs_in_impl(var, t))
+                    || params.iter().any(|p| self.occurs_in_impl(var, p))
+                    || self.occurs_in_impl(var, ret)
+            }
+
+            Type::Row(row) => {
+                row.props.values().any(|t| self.occurs_in_impl(var, t))
+                    || matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var)
+                    || matches!(&row.tail, RowTail::Recursive(_, args) if args.iter().any(|a| self.occurs_in_impl(var, a)))
+            }
+
+            Type::Array(elem) => self.occurs_in_impl(var, elem),
+            Type::Map(value) => self.occurs_in_impl(var, value),
+
+            Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a)),
+        }
+    }
+
+    /// Check if a type variable occurs within a row type (for recursive type detection).
+    /// Returns true if the variable occurs at the tail position of a row.
+    pub fn is_inside_row_type(&self, var: TVarId, ty: &Type) -> bool {
+        let ty = self.apply_subst(ty);
+        self.is_inside_row_type_impl(var, &ty, false)
+    }
+
+    fn is_inside_row_type_impl(&self, var: TVarId, ty: &Type, in_row: bool) -> bool {
+        match ty {
+            Type::Row(row) => {
+                // Check if var is the row tail
+                if matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var) {
+                    return true;
+                }
+
+                // Check inside properties - we're now inside a row
+                row.props
+                    .values()
+                    .any(|t| self.is_inside_row_type_impl(var, t, true))
+            }
+
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                // Function's 'this' parameter can create recursive types when inside rows
+                // (this is the key for equi-recursive types with object methods)
+                this_type
+                    .as_ref()
+                    .map_or(false, |t| self.is_inside_row_type_impl(var, t, in_row))
+                    || params
+                        .iter()
+                        .any(|p| self.is_inside_row_type_impl(var, p, in_row))
+                    || self.is_inside_row_type_impl(var, ret, in_row)
+            }
+
+            Type::Var(TVarName::Flex(id)) if *id == var => {
+                // Found the variable we're looking for
+                // This is valid for recursion if we're inside a row
+                in_row
+            }
+
+            Type::Array(elem) => self.is_inside_row_type_impl(var, elem, in_row),
+            Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
+
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fresh_vars() {
+        let mut state = InferState::new();
+
+        let v1 = state.fresh_flex();
+        let v2 = state.fresh_flex();
+        let v3 = state.fresh_skolem();
+
+        assert!(v1.is_flex());
+        assert!(v2.is_flex());
+        assert!(v3.is_skolem());
+        assert_ne!(v1.id(), v2.id());
+    }
+
+    #[test]
+    fn test_instantiate_mono() {
+        let mut state = InferState::new();
+        let scheme = TypeScheme::mono(Type::Number);
+        let ty = state.instantiate(&scheme);
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_instantiate_poly() {
+        let mut state = InferState::new();
+        let scheme = TypeScheme::poly(
+            vec![TVarName::Flex(100)],
+            Type::simple_func(vec![Type::flex(100)], Type::flex(100)),
+        );
+
+        let ty = state.instantiate(&scheme);
+
+        // Should be a function with fresh variables
+        assert!(ty.is_func());
+    }
+
+    #[test]
+    fn test_occurs_check() {
+        let state = InferState::new();
+
+        // var 0 occurs in (a0 -> a0)
+        let func = Type::simple_func(vec![Type::flex(0)], Type::flex(0));
+        assert!(state.occurs_in(0, &func));
+
+        // var 1 does not occur in (a0 -> a0)
+        assert!(!state.occurs_in(1, &func));
+
+        // var 0 does not occur in Number
+        assert!(!state.occurs_in(0, &Type::Number));
+    }
+
+    #[test]
+    fn test_skolemize() {
+        let mut state = InferState::new();
+        let scheme = TypeScheme::poly(vec![TVarName::Flex(0)], Type::flex(0));
+
+        let (skolems, ty) = state.skolemize(&scheme);
+
+        assert_eq!(skolems.len(), 1);
+        assert!(skolems[0].is_skolem());
+        assert!(ty.is_var());
+    }
+}
