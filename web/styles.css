@@ -118,6 +118,7 @@ main {
     align-items: center;
     justify-content: space-between;
     padding: 8px 16px;
+    min-height: 40px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
 }
@@ -358,15 +359,74 @@ main {
 @media (max-width: 768px) {
     main {
         flex-direction: column;
+        overflow: auto;
     }
 
     .divider {
         width: 100%;
         height: 4px;
         cursor: row-resize;
+        flex-shrink: 0;
+        order: 4;
+        display: none;
+    }
+
+    #input-pane {
+        order: 1;
+    }
+
+    .error-panel {
+        position: relative;
+        order: 2;
+        max-height: none;
+        border-top: none;
+        border-bottom: 2px solid var(--error);
+    }
+
+    #output-pane {
+        order: 3;
     }
 
     .pane {
-        min-height: 200px;
+        flex: 0 0 auto;
+        min-height: 0;
+    }
+
+    .editor-container {
+        flex: 0 0 auto;
+        min-height: 80px;
+        max-height: 40vh;
+    }
+
+    .CodeMirror {
+        position: relative !important;
+        height: auto !important;
+        min-height: 80px;
+        max-height: 40vh;
+    }
+
+    #output-editor {
+        position: relative;
+        min-height: 80px;
+        max-height: 40vh;
+    }
+
+    header {
+        padding: 8px 12px;
+        gap: 10px;
+    }
+
+    header h1 {
+        font-size: 16px;
+    }
+
+    .pane-header {
+        padding: 6px 12px;
+        min-height: 36px;
+    }
+
+    .pane-header button {
+        padding: 3px 10px;
+        font-size: 11px;
     }
 }
