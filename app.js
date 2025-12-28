@@ -139,16 +139,40 @@ function highlightOutput(code, programType) {
     // First, escape HTML
     let escaped = escapeHtml(code);
 
-    // Highlight type comments
+    // Use placeholder approach to avoid regex corruption:
+    // 1. Extract type annotations and comments first, replace with placeholders
+    // 2. Highlight keywords, strings, numbers on the remaining text
+    // 3. Restore the extracted parts with their styling
+
+    const typeAnnotations = [];
+    const comments = [];
+
+    // Extract type annotations
+    escaped = escaped.replace(/\/\*:\s*([^*]+)\s*\*\//g, (match, content) => {
+        const idx = typeAnnotations.length;
+        typeAnnotations.push(content);
+        return `__TYPE_${idx}__`;
+    });
+
+    // Extract regular comments
+    escaped = escaped.replace(/(\/\/[^\n]*)/g, (match) => {
+        const idx = comments.length;
+        comments.push(match);
+        return `__COMMENT_${idx}__`;
+    });
+
+    // Now highlight on text without any HTML spans yet
+
+    // Highlight strings
     escaped = escaped.replace(
-        /\/\*:\s*([^*]+)\s*\*\//g,
-        '<span class="type-annotation">/*: $1 */</span>'
+        /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g,
+        '<span class="string">$1</span>'
     );
 
-    // Highlight regular comments
+    // Highlight numbers (but not in placeholders)
     escaped = escaped.replace(
-        /(\/\/[^\n]*)/g,
-        '<span class="comment">$1</span>'
+        /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b(?!__)/gi,
+        '<span class="number">$1</span>'
     );
 
     // Highlight keywords
@@ -160,23 +184,27 @@ function highlightOutput(code, programType) {
     const keywordPattern = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
     escaped = escaped.replace(keywordPattern, '<span class="keyword">$1</span>');
 
-    // Highlight strings
-    escaped = escaped.replace(
-        /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g,
-        '<span class="string">$1</span>'
-    );
-
-    // Highlight numbers
-    escaped = escaped.replace(
-        /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
-        '<span class="number">$1</span>'
-    );
-
     // Highlight function names (function keyword followed by name)
     escaped = escaped.replace(
         /(<span class="keyword">function<\/span>)\s+(\w+)/g,
         '$1 <span class="function-name">$2</span>'
     );
+
+    // Restore type annotations with styling
+    typeAnnotations.forEach((content, idx) => {
+        escaped = escaped.replace(
+            `__TYPE_${idx}__`,
+            `<span class="type-annotation">/*: ${content}*/</span>`
+        );
+    });
+
+    // Restore comments with styling
+    comments.forEach((content, idx) => {
+        escaped = escaped.replace(
+            `__COMMENT_${idx}__`,
+            `<span class="comment">${content}</span>`
+        );
+    });
 
     // Add program type comment at the top
     const typeComment = `<span class="comment">// Program type: ${escapeHtml(programType)}</span>\n\n`;

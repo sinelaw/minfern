@@ -28,26 +28,6 @@ html, body {
     overflow: hidden;
 }
 
-.top-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 20px;
-    background: var(--bg-surface);
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.top-bar a {
-    color: var(--accent);
-    text-decoration: none;
-    transition: color 0.2s;
-}
-
-.top-bar a:hover {
-    color: var(--accent-hover);
-}
-
 header {
     display: flex;
     align-items: center;
@@ -68,8 +48,41 @@ header .subtitle {
     font-size: 13px;
 }
 
-header .status {
+header .header-right {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+header .credits {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+header .credits a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+header .credits a:hover {
+    color: var(--accent);
+}
+
+header .github-link {
+    color: var(--text-secondary);
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    transition: color 0.2s;
+}
+
+header .github-link:hover {
+    color: var(--accent);
+}
+
+header .status {
     font-size: 12px;
     padding: 4px 10px;
     border-radius: 4px;
@@ -86,7 +99,7 @@ header .status.error {
 
 main {
     display: flex;
-    height: calc(100% - 78px);
+    height: calc(100% - 49px);
     min-height: 0; /* Important for flex children to shrink properly */
     overflow: hidden;
 }
