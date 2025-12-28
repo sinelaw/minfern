@@ -28,6 +28,26 @@ html, body {
     overflow: hidden;
 }
 
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 20px;
+    background: var(--bg-surface);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.top-bar a {
+    color: var(--accent);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.top-bar a:hover {
+    color: var(--accent-hover);
+}
+
 header {
     display: flex;
     align-items: center;
@@ -66,7 +86,7 @@ header .status.error {
 
 main {
     display: flex;
-    height: calc(100% - 50px);
+    height: calc(100% - 78px);
     min-height: 0; /* Important for flex children to shrink properly */
     overflow: hidden;
 }
