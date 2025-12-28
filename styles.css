@@ -118,6 +118,7 @@ main {
     align-items: center;
     justify-content: space-between;
     padding: 8px 16px;
+    min-height: 40px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
 }
@@ -367,6 +368,26 @@ main {
     }
 
     .pane {
-        min-height: 200px;
+        min-height: 120px;
+        flex: 1;
+    }
+
+    header {
+        padding: 8px 12px;
+        gap: 10px;
+    }
+
+    header h1 {
+        font-size: 16px;
+    }
+
+    .pane-header {
+        padding: 6px 12px;
+        min-height: 36px;
+    }
+
+    .pane-header button {
+        padding: 3px 10px;
+        font-size: 11px;
     }
 }
