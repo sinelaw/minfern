@@ -1,0 +1,17 @@
+{
+  "name": "minfern",
+  "type": "module",
+  "description": "HMF-based type inference for mquickjs JavaScript subset",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "minfern_bg.wasm",
+    "minfern.js",
+    "minfern.d.ts"
+  ],
+  "main": "minfern.js",
+  "types": "minfern.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

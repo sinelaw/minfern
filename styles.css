@@ -1,0 +1,339 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-primary: #1e1e2e;
+    --bg-secondary: #181825;
+    --bg-surface: #313244;
+    --text-primary: #cdd6f4;
+    --text-secondary: #a6adc8;
+    --text-muted: #6c7086;
+    --accent: #89b4fa;
+    --accent-hover: #b4befe;
+    --success: #a6e3a1;
+    --error: #f38ba8;
+    --warning: #f9e2af;
+    --border: #45475a;
+    --divider: #585b70;
+}
+
+html, body {
+    height: 100%;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+}
+
+header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+header .subtitle {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+header .status {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+}
+
+header .status.ready {
+    color: var(--success);
+}
+
+header .status.error {
+    color: var(--error);
+}
+
+main {
+    display: flex;
+    height: calc(100% - 50px);
+    min-height: 0; /* Important for flex children to shrink properly */
+    overflow: hidden;
+}
+
+.pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 200px;
+    min-height: 0; /* Important for flex children to shrink properly */
+    overflow: hidden;
+}
+
+.pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+
+.pane-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+.type-display {
+    font-size: 13px;
+    color: var(--success);
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pane-header button {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    background: var(--accent);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.pane-header button:hover {
+    background: var(--accent-hover);
+}
+
+.editor-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    min-height: 0; /* Important for flex children to shrink properly */
+}
+
+.divider {
+    width: 4px;
+    background: var(--border);
+    cursor: col-resize;
+    transition: background 0.2s;
+}
+
+.divider:hover,
+.divider.dragging {
+    background: var(--accent);
+}
+
+/* CodeMirror overrides */
+.CodeMirror {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: auto !important;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace !important;
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--bg-primary) !important;
+}
+
+.CodeMirror-gutters {
+    background: var(--bg-secondary) !important;
+    border-right: 1px solid var(--border) !important;
+}
+
+.CodeMirror-linenumber {
+    color: var(--text-muted) !important;
+}
+
+/* Output display */
+#output-editor {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
+    padding: 12px 16px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#output-editor .comment {
+    color: #6272a4;
+}
+
+#output-editor .keyword {
+    color: #ff79c6;
+}
+
+#output-editor .string {
+    color: #f1fa8c;
+}
+
+#output-editor .number {
+    color: #bd93f9;
+}
+
+#output-editor .function-name {
+    color: #50fa7b;
+}
+
+#output-editor .type-annotation {
+    color: #8be9fd;
+    font-style: italic;
+}
+
+#output-editor .operator {
+    color: #ff79c6;
+}
+
+#output-editor .punctuation {
+    color: #f8f8f2;
+}
+
+#output-editor .identifier {
+    color: #f8f8f2;
+}
+
+#output-editor .property {
+    color: #66d9ef;
+}
+
+/* Error panel */
+.error-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border-top: 2px solid var(--error);
+    max-height: 200px;
+    display: none;
+    flex-direction: column;
+}
+
+.error-panel.visible {
+    display: flex;
+}
+
+.error-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    background: rgba(243, 139, 168, 0.1);
+    color: var(--error);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.error-header button {
+    background: none;
+    border: none;
+    color: var(--error);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.error-content {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 16px;
+}
+
+.error-item {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+.error-item:last-child {
+    border-bottom: none;
+}
+
+.error-item .message {
+    color: var(--error);
+}
+
+.error-item .location {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+/* Error underlines in input */
+.error-underline {
+    text-decoration: underline wavy var(--error);
+    background: rgba(243, 139, 168, 0.15);
+}
+
+/* Loading state */
+.loading #output-editor::after {
+    content: 'Checking types...';
+    color: var(--text-muted);
+}
+
+/* Empty state */
+.empty-state {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--bg-surface);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--divider);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    main {
+        flex-direction: column;
+    }
+
+    .divider {
+        width: 100%;
+        height: 4px;
+        cursor: row-resize;
+    }
+
+    .pane {
+        min-height: 200px;
+    }
+}
