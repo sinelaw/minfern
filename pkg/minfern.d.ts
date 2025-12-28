@@ -5,10 +5,10 @@ export class CheckResult {
   private constructor();
   free(): void;
   [Symbol.dispose](): void;
-  readonly success: boolean;
-  readonly output: string;
   readonly program_type: string;
   readonly errors: any[];
+  readonly output: string;
+  readonly success: boolean;
 }
 
 /**
@@ -26,12 +26,12 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly __wbg_checkresult_free: (a: number, b: number) => void;
-  readonly checkresult_success: (a: number) => number;
+  readonly check_types: (a: number, b: number) => number;
+  readonly checkresult_errors: (a: number) => [number, number];
   readonly checkresult_output: (a: number) => [number, number];
   readonly checkresult_program_type: (a: number) => [number, number];
-  readonly checkresult_errors: (a: number) => [number, number];
+  readonly checkresult_success: (a: number) => number;
   readonly init: () => void;
-  readonly check_types: (a: number, b: number) => number;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;

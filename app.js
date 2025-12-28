@@ -6,7 +6,70 @@ import init, { check_types } from './pkg/minfern.js';
 let wasm = null;
 let inputEditor = null;
 let checkTimeout = null;
+let hashUpdateTimeout = null;
 const DEBOUNCE_MS = 300;
+const HASH_UPDATE_MS = 500;
+
+// URL hash encoding/decoding using UTF-8 + base64
+function encodeToHash(code) {
+    try {
+        // Encode UTF-8 bytes to base64
+        const bytes = new TextEncoder().encode(code);
+        const binary = String.fromCharCode(...bytes);
+        const base64 = btoa(binary);
+        // Make URL-safe: replace + with -, / with _, remove padding =
+        return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch (e) {
+        console.error('Failed to encode to hash:', e);
+        return null;
+    }
+}
+
+function decodeFromHash(hash) {
+    try {
+        // Restore standard base64 from URL-safe version
+        let base64 = hash.replace(/-/g, '+').replace(/_/g, '/');
+        // Add padding if needed
+        while (base64.length % 4) {
+            base64 += '=';
+        }
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return new TextDecoder().decode(bytes);
+    } catch (e) {
+        console.error('Failed to decode from hash:', e);
+        return null;
+    }
+}
+
+function updateUrlHash(code) {
+    const encoded = encodeToHash(code);
+    if (encoded) {
+        // Use replaceState to avoid polluting browser history
+        history.replaceState(null, '', '#' + encoded);
+    }
+}
+
+function scheduleHashUpdate() {
+    if (hashUpdateTimeout) {
+        clearTimeout(hashUpdateTimeout);
+    }
+    hashUpdateTimeout = setTimeout(() => {
+        const code = inputEditor.getValue();
+        updateUrlHash(code);
+    }, HASH_UPDATE_MS);
+}
+
+function getCodeFromUrl() {
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+        return decodeFromHash(hash);
+    }
+    return null;
+}
 
 // Example code
 const EXAMPLE_CODE = `// Welcome to Minfern!
@@ -77,8 +140,20 @@ async function initialize() {
             indentWithTabs: false,
         });
 
-        inputEditor.setValue(EXAMPLE_CODE);
-        inputEditor.on('change', scheduleCheck);
+        // Load code from URL hash or use example
+        const urlCode = getCodeFromUrl();
+        if (urlCode) {
+            inputEditor.setValue(urlCode);
+        } else {
+            inputEditor.setValue(EXAMPLE_CODE);
+            // Set initial hash for example code
+            updateUrlHash(EXAMPLE_CODE);
+        }
+
+        inputEditor.on('change', () => {
+            scheduleCheck();
+            scheduleHashUpdate();
+        });
 
         // Initial check
         checkTypes();
@@ -329,6 +404,15 @@ closeErrorsBtn.addEventListener('click', hideErrors);
 document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
+        checkTypes();
+    }
+});
+
+// Handle browser back/forward navigation
+window.addEventListener('hashchange', () => {
+    const urlCode = getCodeFromUrl();
+    if (urlCode && inputEditor && urlCode !== inputEditor.getValue()) {
+        inputEditor.setValue(urlCode);
         checkTypes();
     }
 });

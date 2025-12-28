@@ -2,9 +2,12 @@
 
 Type checker with full type inference for a subset of JavaScript.
 
+Try it online at: https://sinelaw.github.io/minfern/
+
 Based on the type system developed for [infernu](https://github.com/sinelaw/infernu). See [infernu.md](infernu.md) for a partial formalization (incomplete: doesn't cover `this` resolution, rank restrictions on object properties, or value restriction).
 
-See [mquickjs](https://github.com/bellard/mquickjs) for a relatively close subset of JavaScript.
+
+The JavaScript checked by minfern is just JavaScript and can be run by browsers or any other runtime, or even embedded engines. See [mquickjs](https://github.com/bellard/mquickjs) which is a runtime that also supports a subset of JavaScript.
 
 ## Strictest ever mode
 

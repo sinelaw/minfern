@@ -204,28 +204,6 @@ export class CheckResult {
         wasm.__wbg_checkresult_free(ptr, 0);
     }
     /**
-     * @returns {boolean}
-     */
-    get success() {
-        const ret = wasm.checkresult_success(this.__wbg_ptr);
-        return ret !== 0;
-    }
-    /**
-     * @returns {string}
-     */
-    get output() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.checkresult_output(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
      * @returns {string}
      */
     get program_type() {
@@ -248,6 +226,28 @@ export class CheckResult {
         var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
+    }
+    /**
+     * @returns {string}
+     */
+    get output() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.checkresult_output(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {boolean}
+     */
+    get success() {
+        const ret = wasm.checkresult_success(this.__wbg_ptr);
+        return ret !== 0;
     }
 }
 if (Symbol.dispose) CheckResult.prototype[Symbol.dispose] = CheckResult.prototype.free;
