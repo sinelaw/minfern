@@ -2,7 +2,7 @@
 
 Type checker with full type inference for a subset of JavaScript.
 
-Based on the type system developed for [infernu](https://github.com/sinelaw/infernu).
+Based on the type system developed for [infernu](https://github.com/sinelaw/infernu). See [infernu.md](infernu.md) for a partial formalization (incomplete: doesn't cover `this` resolution, rank restrictions on object properties, or value restriction).
 
 See [mquickjs](https://github.com/bellard/mquickjs) for a relatively close subset of JavaScript.
 
@@ -83,7 +83,13 @@ TLDR: Everything must have a specific type. An object can't sometimes have a val
 - No dynamic property access: `obj[key]` where `obj.name` is String, `obj.age` is Number
 - No type guards: `if (typeof x === "string") return x.toUpperCase(); return x * 2;`
 
+## Supported Syntax
+
+Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `import`/`export` (parsed only - modules not resolved).
+
 ## Future Work
 
 Some of the limitations above are annoying and may be worth supporting in some way or form. It would be nice to support nullable/optional-style union types, or explicit sum types. It would require some work to avoid losing the principal typing property (every expression has a single unambiguous most general type).
+
+Not yet supported: import resolution, arrow functions, `let`, `class`, destructuring, spread/rest, `async`/`await`.
 
