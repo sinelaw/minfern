@@ -367,6 +367,24 @@ main {
         height: 4px;
         cursor: row-resize;
         flex-shrink: 0;
+        order: 4;
+        display: none;
+    }
+
+    #input-pane {
+        order: 1;
+    }
+
+    .error-panel {
+        position: relative;
+        order: 2;
+        max-height: none;
+        border-top: none;
+        border-bottom: 2px solid var(--error);
+    }
+
+    #output-pane {
+        order: 3;
     }
 
     .pane {
