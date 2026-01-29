@@ -67,6 +67,8 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             type_annotation,
             ..
         } => {
+            // For function expressions with type annotations, output inline
+            // since they can appear in expression context
             write!(w, "function")?;
             if let Some(n) = name {
                 write!(w, " {}", n)?;
@@ -80,7 +82,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             }
             write!(w, ")")?;
             if let Some(ann) = type_annotation {
-                write!(w, " /*: {} */", ann.content)?;
+                write!(w, " /** function {}{} */", name.as_deref().unwrap_or(""), ann.content)?;
             }
             write!(w, " ")?;
             write_stmt(w, body, 0)
@@ -397,13 +399,17 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 VarKind::Var => "var",
                 VarKind::Const => "const",
             };
+            // Output type annotations before the declaration
+            for decl in declarations.iter() {
+                if let Some(ann) = &decl.type_annotation {
+                    writeln!(w, "/** {} {}: {} */", kw, decl.name, ann.content)?;
+                    write!(w, "{}", ind)?;
+                }
+            }
             write!(w, "{} ", kw)?;
             for (i, decl) in declarations.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
-                }
-                if let Some(ann) = &decl.type_annotation {
-                    write!(w, "/*: {} */ ", ann.content)?;
                 }
                 write!(w, "{}", decl.name)?;
                 if let Some(init) = &decl.init {
@@ -477,7 +483,6 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
         }
 
         Stmt::Export { declaration, .. } => {
-            write!(w, "export ")?;
             match declaration {
                 ExportDecl::Var {
                     kind, declarations, ..
@@ -486,13 +491,17 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                         VarKind::Var => "var",
                         VarKind::Const => "const",
                     };
-                    write!(w, "{} ", kw)?;
+                    // Output type annotations before the declaration
+                    for decl in declarations.iter() {
+                        if let Some(ann) = &decl.type_annotation {
+                            writeln!(w, "/** export {} {}: {} */", kw, decl.name, ann.content)?;
+                            write!(w, "{}", ind)?;
+                        }
+                    }
+                    write!(w, "export {} ", kw)?;
                     for (i, decl) in declarations.iter().enumerate() {
                         if i > 0 {
                             write!(w, ", ")?;
-                        }
-                        if let Some(ann) = &decl.type_annotation {
-                            write!(w, "/*: {} */ ", ann.content)?;
                         }
                         write!(w, "{}", decl.name)?;
                         if let Some(init) = &decl.init {
@@ -509,18 +518,18 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     type_annotation,
                     ..
                 } => {
-                    write!(w, "function {}(", name)?;
+                    if let Some(ann) = type_annotation {
+                        writeln!(w, "/** export function {}{} */", name, ann.content)?;
+                        write!(w, "{}", ind)?;
+                    }
+                    write!(w, "export function {}(", name)?;
                     for (i, p) in params.iter().enumerate() {
                         if i > 0 {
                             write!(w, ", ")?;
                         }
                         write!(w, "{}", p)?;
                     }
-                    write!(w, ")")?;
-                    if let Some(ann) = type_annotation {
-                        write!(w, " /*: {} */", ann.content)?;
-                    }
-                    write!(w, " ")?;
+                    write!(w, ") ")?;
                     write_stmt(w, body, indent)
                 }
             }
@@ -565,6 +574,15 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             body,
             ..
         } => {
+            // Output type annotations before the for loop
+            if let Some(ForInit::VarDecl(decls)) = init {
+                for decl in decls.iter() {
+                    if let Some(ann) = &decl.type_annotation {
+                        writeln!(w, "/** var {}: {} */", decl.name, ann.content)?;
+                        write!(w, "{}", ind)?;
+                    }
+                }
+            }
             write!(w, "for (")?;
             if let Some(i) = init {
                 match i {
@@ -572,9 +590,6 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                         for (j, decl) in decls.iter().enumerate() {
                             if j > 0 {
                                 write!(w, ", ")?;
-                            }
-                            if let Some(ann) = &decl.type_annotation {
-                                write!(w, "/*: {} */ ", ann.content)?;
                             }
                             if j == 0 {
                                 write!(w, "var ")?;
@@ -604,15 +619,18 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
         Stmt::ForIn {
             left, right, body, ..
         } => {
-            write!(w, "for (")?;
             match left {
                 ForInLhs::VarDecl(name, annotation, _) => {
                     if let Some(ann) = annotation {
-                        write!(w, "/*: {} */ ", ann.content)?;
+                        writeln!(w, "/** var {}: {} */", name, ann.content)?;
+                        write!(w, "{}", ind)?;
                     }
-                    write!(w, "var {}", name)?;
+                    write!(w, "for (var {}", name)?;
                 }
-                ForInLhs::Expr(e) => write_expr(w, e, false)?,
+                ForInLhs::Expr(e) => {
+                    write!(w, "for (")?;
+                    write_expr(w, e, false)?;
+                }
             }
             write!(w, " in ")?;
             write_expr(w, right, false)?;
@@ -623,15 +641,18 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
         Stmt::ForOf {
             left, right, body, ..
         } => {
-            write!(w, "for (")?;
             match left {
                 ForInLhs::VarDecl(name, annotation, _) => {
                     if let Some(ann) = annotation {
-                        write!(w, "/*: {} */ ", ann.content)?;
+                        writeln!(w, "/** var {}: {} */", name, ann.content)?;
+                        write!(w, "{}", ind)?;
                     }
-                    write!(w, "var {}", name)?;
+                    write!(w, "for (var {}", name)?;
                 }
-                ForInLhs::Expr(e) => write_expr(w, e, false)?,
+                ForInLhs::Expr(e) => {
+                    write!(w, "for (")?;
+                    write_expr(w, e, false)?;
+                }
             }
             write!(w, " of ")?;
             write_expr(w, right, false)?;
@@ -727,6 +748,10 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             type_annotation,
             ..
         } => {
+            if let Some(ann) = type_annotation {
+                writeln!(w, "/** function {}{} */", name, ann.content)?;
+                write!(w, "{}", ind)?;
+            }
             write!(w, "function {}(", name)?;
             for (i, p) in params.iter().enumerate() {
                 if i > 0 {
@@ -734,11 +759,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 }
                 write!(w, "{}", p)?;
             }
-            write!(w, ")")?;
-            if let Some(ann) = type_annotation {
-                write!(w, " /*: {} */", ann.content)?;
-            }
-            write!(w, " ")?;
+            write!(w, ") ")?;
             write_stmt(w, body, indent)
         }
     }

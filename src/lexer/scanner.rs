@@ -2,6 +2,7 @@
 
 use super::token::{Span, Spanned, Token};
 use crate::error::{LexError, Result};
+use crate::parser::ast::TypeAnnotation;
 
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {
@@ -9,7 +10,7 @@ pub struct Scanner<'a> {
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
     current_pos: usize,
     /// Collected type annotations for later retrieval
-    type_annotations: Vec<Spanned<String>>,
+    type_annotations: Vec<TypeAnnotation>,
     /// Whether the last token allows a regex to follow (for disambiguation)
     last_token_allows_regex: bool,
     /// Stack of template literal depth (for nested templates)
@@ -29,8 +30,8 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// Tokenize the entire source and return all tokens.
-    pub fn tokenize(mut self) -> Result<Vec<Spanned<Token>>> {
+    /// Tokenize the entire source and return all tokens along with type annotations.
+    pub fn tokenize(mut self) -> Result<(Vec<Spanned<Token>>, Vec<TypeAnnotation>)> {
         let mut tokens = Vec::new();
 
         loop {
@@ -42,7 +43,7 @@ impl<'a> Scanner<'a> {
             }
         }
 
-        Ok(tokens)
+        Ok((tokens, self.type_annotations))
     }
 
     /// Update regex context based on the token we just produced
@@ -234,66 +235,68 @@ impl<'a> Scanner<'a> {
                             self.advance(); // /
                             self.advance(); // *
 
-                            // Check if this is a type annotation /*: ... */
-                            let is_type_annotation =
-                                self.peek().map(|(_, c)| c == ':').unwrap_or(false);
+                            // Check if this is a doc comment /**
+                            if self.peek().map(|(_, c)| c == '*').unwrap_or(false) {
+                                self.advance(); // consume third *
+                                self.skip_whitespace();
 
-                            if is_type_annotation {
-                                self.advance(); // :
-                                let _content_start = self.current_pos;
+                                // Try to read keyword
+                                let keyword = self.peek_keyword();
 
-                                // Read until */
-                                let mut content = String::new();
-                                loop {
-                                    match self.peek() {
-                                        Some((_, '*')) => {
-                                            if self.peek_next() == Some('/') {
-                                                break;
+                                match keyword.as_deref() {
+                                    Some("var") | Some("const") | Some("let") => {
+                                        let kw = keyword.unwrap();
+                                        self.advance_keyword(&kw);
+                                        self.parse_var_annotations(start);
+                                        continue;
+                                    }
+                                    Some("function") => {
+                                        self.advance_keyword("function");
+                                        self.parse_function_annotation(start);
+                                        continue;
+                                    }
+                                    Some("export") => {
+                                        self.advance_keyword("export");
+                                        self.skip_whitespace();
+                                        // Check for "export var" or "export function"
+                                        let next_kw = self.peek_keyword();
+                                        match next_kw.as_deref() {
+                                            Some("var") | Some("const") | Some("let") => {
+                                                let kw = next_kw.unwrap();
+                                                self.advance_keyword(&kw);
+                                                self.parse_var_annotations(start);
+                                                continue;
                                             }
-                                            content.push('*');
-                                            self.advance();
-                                        }
-                                        Some((_, ch)) => {
-                                            content.push(ch);
-                                            self.advance();
-                                        }
-                                        None => {
-                                            return Err(LexError::UnterminatedComment {
-                                                span: Span::new(start, self.current_pos),
+                                            Some("function") => {
+                                                self.advance_keyword("function");
+                                                self.parse_function_annotation(start);
+                                                continue;
                                             }
-                                            .into());
+                                            _ => {} // fall through to regular comment
                                         }
                                     }
+                                    _ => {} // fall through to regular comment
                                 }
+                            }
 
-                                // Store the type annotation
-                                self.type_annotations.push(Spanned::new(
-                                    content.trim().to_string(),
-                                    Span::new(start, self.current_pos + 2),
-                                ));
-
-                                self.advance(); // *
-                                self.advance(); // /
-                            } else {
-                                // Regular comment - skip until */
-                                loop {
-                                    match self.peek() {
-                                        Some((_, '*')) => {
+                            // Regular comment - skip until */
+                            loop {
+                                match self.peek() {
+                                    Some((_, '*')) => {
+                                        self.advance();
+                                        if self.peek().map(|(_, c)| c == '/').unwrap_or(false) {
                                             self.advance();
-                                            if self.peek().map(|(_, c)| c == '/').unwrap_or(false) {
-                                                self.advance();
-                                                break;
-                                            }
+                                            break;
                                         }
-                                        Some(_) => {
-                                            self.advance();
+                                    }
+                                    Some(_) => {
+                                        self.advance();
+                                    }
+                                    None => {
+                                        return Err(LexError::UnterminatedComment {
+                                            span: Span::new(start, self.current_pos),
                                         }
-                                        None => {
-                                            return Err(LexError::UnterminatedComment {
-                                                span: Span::new(start, self.current_pos),
-                                            }
-                                            .into());
-                                        }
+                                        .into());
                                     }
                                 }
                             }
@@ -1008,6 +1011,179 @@ impl<'a> Scanner<'a> {
         Ok(Token::Number(value))
     }
 
+    fn skip_whitespace(&mut self) {
+        while let Some((_, ch)) = self.peek() {
+            if ch.is_whitespace() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Peek ahead to read identifier without consuming
+    fn peek_keyword(&self) -> Option<String> {
+        let mut iter = self.chars.clone();
+        let mut result = String::new();
+
+        while let Some((_, ch)) = iter.next() {
+            if ch.is_alphabetic() || ch == '_' || (!result.is_empty() && ch.is_alphanumeric()) {
+                result.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Advance past the keyword characters
+    fn advance_keyword(&mut self, kw: &str) {
+        for _ in kw.chars() {
+            self.advance();
+        }
+    }
+
+    /// Read an identifier from current position
+    fn read_identifier(&mut self) -> String {
+        let mut name = String::new();
+        while let Some((_, ch)) = self.peek() {
+            if Self::is_ident_char(ch) {
+                name.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        name
+    }
+
+    /// Read content until we hit a comma or end of comment (*/)
+    fn read_until_comma_or_end(&mut self) -> String {
+        let mut content = String::new();
+        let mut paren_depth: i32 = 0;
+
+        while let Some((_, ch)) = self.peek() {
+            // Check for end of comment
+            if ch == '*' && self.peek_next() == Some('/') {
+                break;
+            }
+            // Comma at top level ends this type annotation
+            if ch == ',' && paren_depth == 0 {
+                break;
+            }
+            // Track parentheses for function types like (A, B) => C
+            if ch == '(' {
+                paren_depth += 1;
+            } else if ch == ')' {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            content.push(ch);
+            self.advance();
+        }
+        content
+    }
+
+    /// Read content until end of comment
+    fn read_until_comment_end(&mut self) -> String {
+        let mut content = String::new();
+        while let Some((_, ch)) = self.peek() {
+            if ch == '*' && self.peek_next() == Some('/') {
+                break;
+            }
+            content.push(ch);
+            self.advance();
+        }
+        content
+    }
+
+    /// Consume closing */
+    fn consume_comment_end(&mut self) {
+        if self.peek().map(|(_, c)| c == '*').unwrap_or(false) {
+            self.advance(); // *
+        }
+        if self.peek().map(|(_, c)| c == '/').unwrap_or(false) {
+            self.advance(); // /
+        }
+    }
+
+    /// Parse variable annotations: name: Type [, name: Type]*
+    fn parse_var_annotations(&mut self, start: usize) {
+        self.skip_whitespace();
+
+        loop {
+            // Read name
+            let name = self.read_identifier();
+            if name.is_empty() {
+                break;
+            }
+
+            self.skip_whitespace();
+
+            // Expect ':'
+            if !self.peek().map(|(_, c)| c == ':').unwrap_or(false) {
+                break;
+            }
+            self.advance(); // consume ':'
+            self.skip_whitespace();
+
+            // Read type until ',' or '*/'
+            let content = self.read_until_comma_or_end();
+
+            self.type_annotations.push(TypeAnnotation {
+                name: name.trim().to_string(),
+                content: content.trim().to_string(),
+                span: Span::new(start, self.current_pos + 2),
+            });
+
+            self.skip_whitespace();
+
+            // Check for comma to continue
+            if self.peek().map(|(_, c)| c == ',').unwrap_or(false) {
+                self.advance(); // consume ','
+                self.skip_whitespace();
+                continue;
+            }
+            break;
+        }
+
+        // Consume closing */
+        self.consume_comment_end();
+    }
+
+    /// Parse function annotation: name(params): ReturnType
+    fn parse_function_annotation(&mut self, start: usize) {
+        self.skip_whitespace();
+
+        let name = self.read_identifier();
+        if name.is_empty() {
+            // Fall back to consuming as regular comment
+            self.consume_comment_end();
+            return;
+        }
+
+        self.skip_whitespace();
+
+        // Read everything from current position to */ as content
+        let content = self.read_until_comment_end();
+
+        self.type_annotations.push(TypeAnnotation {
+            name: name.trim().to_string(),
+            content: content.trim().to_string(),
+            span: Span::new(start, self.current_pos + 2),
+        });
+
+        self.consume_comment_end();
+    }
+
+    fn is_ident_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_' || ch == '$'
+    }
+
     fn scan_identifier(&mut self) -> Token {
         let start = self.current_pos;
 
@@ -1027,7 +1203,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Get collected type annotations
-    pub fn type_annotations(&self) -> &[Spanned<String>] {
+    pub fn type_annotations(&self) -> &[TypeAnnotation] {
         &self.type_annotations
     }
 }
@@ -1040,6 +1216,7 @@ mod tests {
         Scanner::new(source)
             .tokenize()
             .unwrap()
+            .0
             .into_iter()
             .map(|s| s.value)
             .collect()
@@ -1134,12 +1311,15 @@ mod tests {
 
     #[test]
     fn test_type_annotation() {
-        let scanner = Scanner::new("var x /*: Number */ = 42;");
-        let tokens = scanner.tokenize().unwrap();
+        let scanner = Scanner::new("/** var x: Number */ var x = 42;");
+        let (tokens, annotations) = scanner.tokenize().unwrap();
         assert!(tokens.iter().any(|t| t.value == Token::Var));
         assert!(tokens
             .iter()
             .any(|t| matches!(&t.value, Token::Ident(s) if s == "x")));
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].name, "x");
+        assert_eq!(annotations[0].content, "Number");
     }
 
     #[test]

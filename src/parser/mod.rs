@@ -15,14 +15,14 @@ pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
     /// Type annotations extracted by the lexer
-    type_annotations: Vec<Spanned<String>>,
+    type_annotations: Vec<TypeAnnotation>,
     annotation_pos: usize,
     /// Whether to disallow 'in' as a binary operator (for for-loop init)
     no_in: bool,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Spanned<Token>>, type_annotations: Vec<Spanned<String>>) -> Self {
+    pub fn new(tokens: Vec<Spanned<Token>>, type_annotations: Vec<TypeAnnotation>) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -149,8 +149,8 @@ impl Parser {
 
         let name = self.expect_ident()?;
 
-        // Check for type annotation
-        let type_annotation = self.try_get_type_annotation(self.current_span());
+        // Check for type annotation matching this variable name
+        let type_annotation = self.try_get_type_annotation(self.current_span(), &name);
 
         let init = if self.consume_if(&Token::Eq) {
             Some(self.parse_assignment_expression()?)
@@ -316,13 +316,14 @@ impl Parser {
             }
             Token::Function => {
                 // export function foo() {}
+                let func_start = self.current_span();
                 self.advance();
                 let name = self.expect_ident()?;
+                // Check for type annotation matching this function name
+                let type_annotation = self.try_get_type_annotation_for_function(func_start, &name);
                 self.expect(&Token::LParen)?;
                 let params = self.parse_parameters()?;
-                let rparen_end = self.current_span().end;
                 self.expect(&Token::RParen)?;
-                let type_annotation = self.try_get_type_annotation_after(rparen_end);
                 let body = Box::new(self.parse_block_statement()?);
                 let func_span = Span::new(start, self.prev_span().end);
 
@@ -362,18 +363,18 @@ impl Parser {
 
     fn parse_function_declaration(&mut self) -> Result<Stmt> {
         let start = self.current_span().start;
+        let func_span = self.current_span();
 
         self.expect(&Token::Function)?;
 
         let name = self.expect_ident()?;
 
+        // Check for type annotation that matches this function name
+        let type_annotation = self.try_get_type_annotation_for_function(func_span, &name);
+
         self.expect(&Token::LParen)?;
         let params = self.parse_parameters()?;
-        let rparen_end = self.current_span().end;
         self.expect(&Token::RParen)?;
-
-        // Check for type annotation after params, before body
-        let type_annotation = self.try_get_type_annotation_after(rparen_end);
 
         let body = Box::new(self.parse_block_statement()?);
 
@@ -482,7 +483,7 @@ impl Parser {
             self.advance();
             let name = self.expect_ident()?;
             let var_end = self.prev_span().end;
-            let type_annotation = self.try_get_type_annotation(self.current_span());
+            let type_annotation = self.try_get_type_annotation(self.current_span(), &name);
             let var_span = Span::new(var_start, var_end);
 
             // Check for for-in/of
@@ -1477,6 +1478,7 @@ impl Parser {
 
     fn parse_function_expression(&mut self) -> Result<Expr> {
         let start = self.current_span().start;
+        let func_span = self.current_span();
 
         self.expect(&Token::Function)?;
 
@@ -1487,13 +1489,16 @@ impl Parser {
             None
         };
 
+        // Check for type annotation if function has a name
+        let type_annotation = if let Some(ref n) = name {
+            self.try_get_type_annotation_for_function(func_span, n)
+        } else {
+            None
+        };
+
         self.expect(&Token::LParen)?;
         let params = self.parse_parameters()?;
-        let rparen_end = self.current_span().end;
         self.expect(&Token::RParen)?;
-
-        // Check for type annotation after params, before body
-        let type_annotation = self.try_get_type_annotation_after(rparen_end);
 
         let body = Box::new(self.parse_block_statement()?);
 
@@ -1632,38 +1637,47 @@ impl Parser {
         self.consume_if(&Token::Semicolon);
     }
 
-    /// Try to get a type annotation that ends before the given span
-    fn try_get_type_annotation(&mut self, before_span: Span) -> Option<TypeAnnotation> {
-        // Look for a type annotation that ends before this position
+    /// Try to get a type annotation that ends before the given span and matches the name
+    fn try_get_type_annotation(&mut self, before_span: Span, name: &str) -> Option<TypeAnnotation> {
+        // Look for a type annotation that ends before this position and matches the name
         while self.annotation_pos < self.type_annotations.len() {
             let ann = &self.type_annotations[self.annotation_pos];
             if ann.span.end <= before_span.start {
+                if ann.name == name {
+                    self.annotation_pos += 1;
+                    return Some(TypeAnnotation {
+                        name: ann.name.clone(),
+                        content: ann.content.clone(),
+                        span: ann.span,
+                    });
+                }
+                // Skip annotations that don't match
                 self.annotation_pos += 1;
-                return Some(TypeAnnotation {
-                    content: ann.value.clone(),
-                    span: ann.span,
-                });
+                continue;
             }
             break;
         }
         None
     }
 
-    /// Try to get a type annotation that starts after the given position
-    /// and ends before the current token position.
-    fn try_get_type_annotation_after(&mut self, after_pos: usize) -> Option<TypeAnnotation> {
-        let current_pos = self.current_span().start;
-
+    /// Try to get a type annotation that matches the name
+    /// This is used for functions where the annotation appears before the function declaration
+    fn try_get_type_annotation_for_function(&mut self, before_span: Span, name: &str) -> Option<TypeAnnotation> {
+        // Look for a type annotation that ends before this position and matches the name
         while self.annotation_pos < self.type_annotations.len() {
             let ann = &self.type_annotations[self.annotation_pos];
-            // Annotation must start after the given position
-            // and end before the current token
-            if ann.span.start >= after_pos && ann.span.end <= current_pos {
+            if ann.span.end <= before_span.start {
+                if ann.name == name {
+                    self.annotation_pos += 1;
+                    return Some(TypeAnnotation {
+                        name: ann.name.clone(),
+                        content: ann.content.clone(),
+                        span: ann.span,
+                    });
+                }
+                // Skip annotations that don't match
                 self.annotation_pos += 1;
-                return Some(TypeAnnotation {
-                    content: ann.value.clone(),
-                    span: ann.span,
-                });
+                continue;
             }
             break;
         }
@@ -1676,8 +1690,7 @@ pub fn parse(source: &str) -> Result<Program> {
     use crate::lexer::Scanner;
 
     let scanner = Scanner::new(source);
-    let tokens = scanner.tokenize()?;
-    let type_annotations = vec![]; // TODO: Get from scanner
+    let (tokens, type_annotations) = scanner.tokenize()?;
 
     let mut parser = Parser::new(tokens, type_annotations);
     parser.parse_program()

@@ -218,9 +218,10 @@ pub enum PropDef {
     },
 }
 
-/// Type annotation from comments
+/// Type annotation from comments: /** name: Type */
 #[derive(Debug, Clone)]
 pub struct TypeAnnotation {
+    pub name: String,
     pub content: String,
     pub span: Source,
 }

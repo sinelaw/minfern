@@ -722,13 +722,21 @@ impl<'a> Decorator<'a> {
             body: QualType::with_preds(preds, ty),
         };
         let content = self.ctx.format_scheme(&applied_scheme);
-        TypeAnnotation { content, span }
+        TypeAnnotation {
+            name: "".to_string(),
+            content,
+            span,
+        }
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
         let ty = self.state.apply_subst(ty);
         let content = self.ctx.format_type(&ty);
-        TypeAnnotation { content, span }
+        TypeAnnotation {
+            name: "".to_string(),
+            content,
+            span,
+        }
     }
 }
 

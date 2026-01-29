@@ -1733,7 +1733,7 @@ mod tests {
 
     #[test]
     fn test_annotation_var_number() {
-        let (_, env, state) = infer_program_with_state("/*: Number */ var x = 42;").unwrap();
+        let (_, env, state) = infer_program_with_state("/** var x: Number */ var x = 42;").unwrap();
         let scheme = env.lookup("x").unwrap();
         let ty = state.apply_subst(&scheme.body.ty);
         assert_eq!(ty, Type::Number);
@@ -1741,7 +1741,7 @@ mod tests {
 
     #[test]
     fn test_annotation_var_string() {
-        let (_, env, state) = infer_program_with_state("/*: String */ var s = \"hello\";").unwrap();
+        let (_, env, state) = infer_program_with_state("/** var s: String */ var s = \"hello\";").unwrap();
         let scheme = env.lookup("s").unwrap();
         let ty = state.apply_subst(&scheme.body.ty);
         assert_eq!(ty, Type::String);
@@ -1750,7 +1750,7 @@ mod tests {
     #[test]
     fn test_annotation_var_array() {
         let (_, env, state) =
-            infer_program_with_state("/*: Number[] */ var arr = [1, 2, 3];").unwrap();
+            infer_program_with_state("/** var arr: Number[] */ var arr = [1, 2, 3];").unwrap();
         let scheme = env.lookup("arr").unwrap();
         let ty = state.apply_subst(&scheme.body.ty);
         assert_eq!(ty, Type::array(Type::Number));
@@ -1758,8 +1758,9 @@ mod tests {
 
     #[test]
     fn test_annotation_function_params() {
+        // Use arrow syntax for function type annotations as expected by type parser
         let (_, env, state) = infer_program_with_state(
-            "function add(a, b) /*: (Number, Number) => Number */ { return a + b; }",
+            "/** function add(a: Number, b: Number) => Number */ function add(a, b) { return a + b; }",
         )
         .unwrap();
         let scheme = env.lookup("add").unwrap();
@@ -1780,7 +1781,7 @@ mod tests {
     #[test]
     fn test_annotation_mismatch_error() {
         // Type annotation says String but value is Number - should error
-        let result = infer_program_with_state("/*: String */ var x = 42;");
+        let result = infer_program_with_state("/** var x: String */ var x = 42;");
         assert!(result.is_err());
     }
 
@@ -1788,7 +1789,7 @@ mod tests {
     fn test_annotation_more_specific_than_inferred() {
         // Empty array would be inferred as a[] (polymorphic element type),
         // but annotation constrains it to Number[]
-        let (_, env, state) = infer_program_with_state("/*: Number[] */ var x = [];").unwrap();
+        let (_, env, state) = infer_program_with_state("/** var x: Number[] */ var x = [];").unwrap();
         let scheme = env.lookup("x").unwrap();
         let ty = state.apply_subst(&scheme.body.ty);
         assert_eq!(ty, Type::array(Type::Number));
@@ -2305,7 +2306,8 @@ mod tests {
     fn test_var_declaration_is_immutable() {
         // var with type annotation and no init is treated as immutable declaration
         let source = r#"
-            var x /*: Number */;
+            /** var x: Number */
+            var x;
         "#;
         let (_, env, _) = infer_program_with_state(source).expect("Should type-check successfully");
 
@@ -2337,7 +2339,8 @@ mod tests {
     fn test_declaration_assignment_rejected() {
         // Assignment to declared variable should fail
         let source = r#"
-            var x /*: Number */;
+            /** var x: Number */
+            var x;
             x = 42;
         "#;
         let result = infer_program_with_state(source);
@@ -2355,7 +2358,8 @@ mod tests {
     fn test_monomorphic_function_declaration() {
         // A monomorphic function declaration should work
         let source = r#"
-            var greet /*: (name: String) => String */;
+            /** var greet: (name: String) => String */
+            var greet;
             var result = greet("world");
         "#;
         let (_, env, state) =
@@ -2374,7 +2378,8 @@ mod tests {
     fn test_monomorphic_function_declaration_is_immutable() {
         // Monomorphic function declaration should be immutable
         let source = r#"
-            var greet /*: (name: String) => String */;
+            /** var greet: (name: String) => String */
+            var greet;
             greet = function(name) { return "Hello, " + name; };
         "#;
         let result = infer_program_with_state(source);
@@ -2388,7 +2393,8 @@ mod tests {
     fn test_monomorphic_object_property_assignment() {
         // Assignment to monomorphic property of immutable object declaration should succeed
         let source = r#"
-            var obj /*: { count: Number } */;
+            /** var obj: { count: Number } */
+            var obj;
             obj.count = 42;
         "#;
         let result = infer_program_with_state(source);
