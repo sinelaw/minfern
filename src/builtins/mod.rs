@@ -53,6 +53,30 @@ pub fn initial_env() -> TypeEnv {
             Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
         ),
         ("random", Type::simple_func(vec![], Type::Number)),
+        // Missing Math methods
+        ("log", Type::simple_func(vec![Type::Number], Type::Number)),
+        ("log2", Type::simple_func(vec![Type::Number], Type::Number)),
+        (
+            "log10",
+            Type::simple_func(vec![Type::Number], Type::Number),
+        ),
+        ("exp", Type::simple_func(vec![Type::Number], Type::Number)),
+        ("sin", Type::simple_func(vec![Type::Number], Type::Number)),
+        ("cos", Type::simple_func(vec![Type::Number], Type::Number)),
+        ("tan", Type::simple_func(vec![Type::Number], Type::Number)),
+        (
+            "atan2",
+            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
+        ),
+        (
+            "trunc",
+            Type::simple_func(vec![Type::Number], Type::Number),
+        ),
+        ("sign", Type::simple_func(vec![Type::Number], Type::Number)),
+        (
+            "hypot",
+            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
+        ),
     ]);
     env = env.extend("Math".to_string(), TypeScheme::mono(math_type));
 
@@ -332,6 +356,33 @@ mod tests {
 
         // The index should be Number (array-style) not String (object-style)
         assert_eq!(state.apply_subst(&index), Type::Number);
+    }
+
+    #[test]
+    fn test_initial_env_has_math_methods() {
+        let env = initial_env();
+        let math_scheme = env.lookup("Math").unwrap();
+        let math_ty = &math_scheme.body.ty;
+        if let Type::Row(row) = math_ty {
+            // Existing methods
+            assert!(row.has_prop(&"abs".into()));
+            assert!(row.has_prop(&"floor".into()));
+            assert!(row.has_prop(&"random".into()));
+            // New methods
+            assert!(row.has_prop(&"log".into()));
+            assert!(row.has_prop(&"log2".into()));
+            assert!(row.has_prop(&"log10".into()));
+            assert!(row.has_prop(&"exp".into()));
+            assert!(row.has_prop(&"sin".into()));
+            assert!(row.has_prop(&"cos".into()));
+            assert!(row.has_prop(&"tan".into()));
+            assert!(row.has_prop(&"atan2".into()));
+            assert!(row.has_prop(&"trunc".into()));
+            assert!(row.has_prop(&"sign".into()));
+            assert!(row.has_prop(&"hypot".into()));
+        } else {
+            panic!("Math should be a Row type");
+        }
     }
 
     #[test]

@@ -719,12 +719,152 @@ impl InferState {
     ) -> InferResult<Type> {
         // Handle built-in properties for arrays and strings
         match obj_type {
-            Type::Array(_) => match property {
+            Type::Array(elem) => match property {
                 "length" => return Ok(Type::Number),
+                // Mutating methods
+                "push" => {
+                    return Ok(Type::simple_func(vec![*elem.clone()], Type::Number))
+                }
+                "pop" => return Ok(Type::simple_func(vec![], *elem.clone())),
+                "reverse" => {
+                    return Ok(Type::simple_func(vec![], Type::array(*elem.clone())))
+                }
+                "sort" => {
+                    return Ok(Type::simple_func(vec![], Type::array(*elem.clone())))
+                }
+                "fill" => {
+                    return Ok(Type::simple_func(
+                        vec![*elem.clone()],
+                        Type::array(*elem.clone()),
+                    ))
+                }
+                // Non-mutating methods
+                "indexOf" => {
+                    return Ok(Type::simple_func(vec![*elem.clone()], Type::Number))
+                }
+                "includes" => {
+                    return Ok(Type::simple_func(vec![*elem.clone()], Type::Boolean))
+                }
+                "slice" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::Number, Type::Number],
+                        Type::array(*elem.clone()),
+                    ))
+                }
+                "concat" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::array(*elem.clone())],
+                        Type::array(*elem.clone()),
+                    ))
+                }
+                "join" => return Ok(Type::simple_func(vec![Type::String], Type::String)),
+                // Higher-order methods
+                "map" => {
+                    let u = self.fresh_type_var();
+                    let callback = Type::simple_func(vec![*elem.clone()], u.clone());
+                    return Ok(Type::simple_func(vec![callback], Type::array(u)));
+                }
+                "filter" => {
+                    let callback =
+                        Type::simple_func(vec![*elem.clone()], Type::Boolean);
+                    return Ok(Type::simple_func(
+                        vec![callback],
+                        Type::array(*elem.clone()),
+                    ));
+                }
+                "forEach" => {
+                    let callback =
+                        Type::simple_func(vec![*elem.clone()], Type::Undefined);
+                    return Ok(Type::simple_func(vec![callback], Type::Undefined));
+                }
+                "reduce" => {
+                    let u = self.fresh_type_var();
+                    let callback = Type::simple_func(
+                        vec![u.clone(), *elem.clone()],
+                        u.clone(),
+                    );
+                    return Ok(Type::simple_func(vec![callback, u.clone()], u));
+                }
+                "some" => {
+                    let callback =
+                        Type::simple_func(vec![*elem.clone()], Type::Boolean);
+                    return Ok(Type::simple_func(vec![callback], Type::Boolean));
+                }
+                "every" => {
+                    let callback =
+                        Type::simple_func(vec![*elem.clone()], Type::Boolean);
+                    return Ok(Type::simple_func(vec![callback], Type::Boolean));
+                }
+                "find" => {
+                    let callback =
+                        Type::simple_func(vec![*elem.clone()], Type::Boolean);
+                    return Ok(Type::simple_func(vec![callback], *elem.clone()));
+                }
                 _ => {}
             },
             Type::String => match property {
                 "length" => return Ok(Type::Number),
+                // String methods
+                "indexOf" => {
+                    return Ok(Type::simple_func(vec![Type::String], Type::Number))
+                }
+                "substring" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::Number, Type::Number],
+                        Type::String,
+                    ))
+                }
+                "substr" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::Number, Type::Number],
+                        Type::String,
+                    ))
+                }
+                "slice" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::Number, Type::Number],
+                        Type::String,
+                    ))
+                }
+                "split" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::String],
+                        Type::array(Type::String),
+                    ))
+                }
+                "trim" => return Ok(Type::simple_func(vec![], Type::String)),
+                "replace" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::String, Type::String],
+                        Type::String,
+                    ))
+                }
+                "toUpperCase" => return Ok(Type::simple_func(vec![], Type::String)),
+                "toLowerCase" => return Ok(Type::simple_func(vec![], Type::String)),
+                "charAt" => {
+                    return Ok(Type::simple_func(vec![Type::Number], Type::String))
+                }
+                "charCodeAt" => {
+                    return Ok(Type::simple_func(vec![Type::Number], Type::Number))
+                }
+                "startsWith" => {
+                    return Ok(Type::simple_func(vec![Type::String], Type::Boolean))
+                }
+                "endsWith" => {
+                    return Ok(Type::simple_func(vec![Type::String], Type::Boolean))
+                }
+                "includes" => {
+                    return Ok(Type::simple_func(vec![Type::String], Type::Boolean))
+                }
+                "repeat" => {
+                    return Ok(Type::simple_func(vec![Type::Number], Type::String))
+                }
+                "padStart" => {
+                    return Ok(Type::simple_func(
+                        vec![Type::Number, Type::String],
+                        Type::String,
+                    ))
+                }
                 _ => {}
             },
             Type::Row(row) => {
@@ -2598,5 +2738,286 @@ mod tests {
         } else {
             panic!("map should be a function type");
         }
+    }
+
+    // ========== String method tests ==========
+
+    #[test]
+    fn test_string_indexof() {
+        let ty = infer_expr_str("\"hello\".indexOf(\"l\")").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_string_substring() {
+        let ty = infer_expr_str("\"hello\".substring(1, 3)").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_split() {
+        let ty = infer_expr_str("\"a,b,c\".split(\",\")").unwrap();
+        assert_eq!(ty, Type::array(Type::String));
+    }
+
+    #[test]
+    fn test_string_trim() {
+        let ty = infer_expr_str("\" hello \".trim()").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_replace() {
+        let ty = infer_expr_str("\"hello\".replace(\"l\", \"r\")").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_to_upper_case() {
+        let ty = infer_expr_str("\"hello\".toUpperCase()").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_to_lower_case() {
+        let ty = infer_expr_str("\"HELLO\".toLowerCase()").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_char_at() {
+        let ty = infer_expr_str("\"hello\".charAt(0)").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_char_code_at() {
+        let ty = infer_expr_str("\"hello\".charCodeAt(0)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_string_starts_with() {
+        let ty = infer_expr_str("\"hello\".startsWith(\"he\")").unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_string_ends_with() {
+        let ty = infer_expr_str("\"hello\".endsWith(\"lo\")").unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_string_includes() {
+        let ty = infer_expr_str("\"hello\".includes(\"ell\")").unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_string_repeat() {
+        let ty = infer_expr_str("\"ha\".repeat(3)").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_pad_start() {
+        let ty = infer_expr_str("\"5\".padStart(3, \"0\")").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_slice() {
+        let ty = infer_expr_str("\"hello\".slice(1, 3)").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_string_substr() {
+        let ty = infer_expr_str("\"hello\".substr(1, 3)").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    // ========== Array method tests ==========
+
+    #[test]
+    fn test_array_push() {
+        let ty = infer_expr_str("[1, 2].push(3)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_array_pop() {
+        let ty = infer_expr_str("[1, 2, 3].pop()").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_array_indexof() {
+        let ty = infer_expr_str("[1, 2, 3].indexOf(2)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_array_includes() {
+        let ty = infer_expr_str("[1, 2, 3].includes(2)").unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_array_slice() {
+        let ty = infer_expr_str("[1, 2, 3].slice(0, 2)").unwrap();
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    #[test]
+    fn test_array_concat() {
+        let ty = infer_expr_str("[1, 2].concat([3, 4])").unwrap();
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    #[test]
+    fn test_array_join() {
+        let ty = infer_expr_str("[1, 2, 3].join(\",\")").unwrap();
+        assert_eq!(ty, Type::String);
+    }
+
+    #[test]
+    fn test_array_reverse() {
+        let ty = infer_expr_str("[1, 2, 3].reverse()").unwrap();
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    #[test]
+    fn test_array_sort() {
+        let ty = infer_expr_str("[3, 1, 2].sort()").unwrap();
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    #[test]
+    fn test_array_fill() {
+        let ty = infer_expr_str("[1, 2, 3].fill(0)").unwrap();
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    // ========== Higher-order array method tests ==========
+
+    #[test]
+    fn test_array_map() {
+        let (_, env, state) = infer_program_with_state(
+            "var result = [1, 2, 3].map(function(x) { return x + 1; });",
+        )
+        .unwrap();
+        let scheme = env.lookup("result").unwrap();
+        let ty = state.apply_subst(&scheme.body.ty);
+        // map with (Number) => Number should return Number[]
+        assert!(matches!(ty, Type::Array(_)));
+    }
+
+    #[test]
+    fn test_array_filter() {
+        let (_, env, state) = infer_program_with_state(
+            "var result = [1, 2, 3].filter(function(x) { return x > 1; });",
+        )
+        .unwrap();
+        let scheme = env.lookup("result").unwrap();
+        let ty = state.apply_subst(&scheme.body.ty);
+        assert_eq!(ty, Type::array(Type::Number));
+    }
+
+    #[test]
+    fn test_array_foreach() {
+        let ty = infer_expr_str(
+            "[1, 2, 3].forEach(function(x) { console.log(x); })",
+        )
+        .unwrap();
+        assert_eq!(ty, Type::Undefined);
+    }
+
+    #[test]
+    fn test_array_some() {
+        let ty = infer_expr_str(
+            "[1, 2, 3].some(function(x) { return x > 2; })",
+        )
+        .unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_array_every() {
+        let ty = infer_expr_str(
+            "[1, 2, 3].every(function(x) { return x > 0; })",
+        )
+        .unwrap();
+        assert_eq!(ty, Type::Boolean);
+    }
+
+    #[test]
+    fn test_array_find() {
+        let ty = infer_expr_str(
+            "[1, 2, 3].find(function(x) { return x > 1; })",
+        )
+        .unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_array_reduce() {
+        let ty = infer_expr_str(
+            "[1, 2, 3].reduce(function(acc, x) { return acc + x; }, 0)",
+        )
+        .unwrap();
+        // With Plus constraint, result should be Number (or a constrained var)
+        assert!(matches!(ty, Type::Number | Type::Var(_)));
+    }
+
+    // ========== Math method tests ==========
+
+    #[test]
+    fn test_math_log() {
+        let ty = infer_expr_str("Math.log(10)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_sin() {
+        let ty = infer_expr_str("Math.sin(3.14)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_cos() {
+        let ty = infer_expr_str("Math.cos(0)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_trunc() {
+        let ty = infer_expr_str("Math.trunc(4.5)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_atan2() {
+        let ty = infer_expr_str("Math.atan2(1, 0)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_hypot() {
+        let ty = infer_expr_str("Math.hypot(3, 4)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_sign() {
+        let ty = infer_expr_str("Math.sign(42)").unwrap();
+        assert_eq!(ty, Type::Number);
+    }
+
+    #[test]
+    fn test_math_exp() {
+        let ty = infer_expr_str("Math.exp(1)").unwrap();
+        assert_eq!(ty, Type::Number);
     }
 }
