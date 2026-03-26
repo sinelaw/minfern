@@ -1662,7 +1662,11 @@ impl Parser {
 
     /// Try to get a type annotation that matches the name
     /// This is used for functions where the annotation appears before the function declaration
-    fn try_get_type_annotation_for_function(&mut self, before_span: Span, name: &str) -> Option<TypeAnnotation> {
+    fn try_get_type_annotation_for_function(
+        &mut self,
+        before_span: Span,
+        name: &str,
+    ) -> Option<TypeAnnotation> {
         // Look for a type annotation that ends before this position and matches the name
         while self.annotation_pos < self.type_annotations.len() {
             let ann = &self.type_annotations[self.annotation_pos];

@@ -82,7 +82,12 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             }
             write!(w, ")")?;
             if let Some(ann) = type_annotation {
-                write!(w, " /** function {}{} */", name.as_deref().unwrap_or(""), ann.content)?;
+                write!(
+                    w,
+                    " /** function {}{} */",
+                    name.as_deref().unwrap_or(""),
+                    ann.content
+                )?;
             }
             write!(w, " ")?;
             write_stmt(w, body, 0)
