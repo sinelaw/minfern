@@ -819,6 +819,14 @@ impl Parser {
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expr> {
+        // Arrow functions are the only expression whose start overlaps with
+        // a parenthesised expression or a bare identifier, so we look ahead
+        // for a `=>` and take that path before falling back to the regular
+        // assignment grammar.
+        if self.looks_like_arrow_function() {
+            return self.parse_arrow_function();
+        }
+
         let expr = self.parse_conditional_expression()?;
 
         if let Some(op) = self.assignment_op() {
@@ -1481,6 +1489,98 @@ impl Parser {
             _ => unreachable!("keyword_to_string called on non-keyword"),
         }
         .to_string()
+    }
+
+    /// Lookahead: is the token stream at this point the head of an arrow
+    /// function? Accepts `ident =>`, `() =>`, and `(ident [, ident]*) =>`.
+    /// Does not consume anything.
+    fn looks_like_arrow_function(&self) -> bool {
+        // Simple param: `ident =>`
+        if matches!(self.current(), Token::Ident(_)) {
+            return self.tokens
+                .get(self.pos + 1)
+                .map(|s| matches!(s.value, Token::FatArrow))
+                .unwrap_or(false);
+        }
+
+        // Parenthesised params: `(` ... `)` `=>`
+        if matches!(self.current(), Token::LParen) {
+            let mut i = self.pos + 1;
+            let mut depth: i32 = 1;
+            while let Some(tok) = self.tokens.get(i) {
+                match &tok.value {
+                    Token::LParen => depth += 1,
+                    Token::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return self.tokens
+                                .get(i + 1)
+                                .map(|s| matches!(s.value, Token::FatArrow))
+                                .unwrap_or(false);
+                        }
+                    }
+                    // Inside the paren list we only expect idents, commas
+                    // and type annotations. If we see anything that rules
+                    // out a plain arrow param list (e.g. `{`, `[`), bail
+                    // early rather than scanning the entire program.
+                    Token::LBrace | Token::LBracket | Token::Eof => return false,
+                    _ => {}
+                }
+                i += 1;
+            }
+            return false;
+        }
+
+        false
+    }
+
+    /// Parse an arrow function. Called after [`looks_like_arrow_function`]
+    /// has confirmed we're at the head of one, so all of the error paths
+    /// below correspond to an actual malformed arrow.
+    ///
+    /// Lowers to `Expr::Function`: a block body becomes the function body
+    /// directly, an expression body becomes a synthesised `return <expr>;`.
+    fn parse_arrow_function(&mut self) -> Result<Expr> {
+        let start = self.current_span().start;
+
+        // Parse parameters.
+        let params: Vec<String> = if matches!(self.current(), Token::Ident(_)) {
+            // Single-identifier form: `x => ...`
+            let name = self.expect_ident()?;
+            vec![name]
+        } else {
+            self.expect(&Token::LParen)?;
+            let params = self.parse_parameters()?;
+            self.expect(&Token::RParen)?;
+            params
+        };
+
+        self.expect(&Token::FatArrow)?;
+
+        // Body: block `{ ... }` or a single expression.
+        let body = if self.check(&Token::LBrace) {
+            Box::new(self.parse_block_statement()?)
+        } else {
+            let expr_start = self.current_span().start;
+            let expr = self.parse_assignment_expression()?;
+            let expr_end = self.prev_span().end;
+            let return_span = Span::new(expr_start, expr_end);
+            Box::new(Stmt::Block {
+                body: vec![Stmt::Return {
+                    argument: Some(expr),
+                    span: return_span,
+                }],
+                span: return_span,
+            })
+        };
+
+        Ok(Expr::Function {
+            name: None,
+            params,
+            body,
+            type_annotation: None,
+            span: Span::new(start, self.prev_span().end),
+        })
     }
 
     fn parse_function_expression(&mut self) -> Result<Expr> {

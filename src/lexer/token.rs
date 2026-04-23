@@ -160,6 +160,7 @@ pub enum Token {
     Semicolon, // ;
     Colon,     // :
     Question,  // ?
+    FatArrow,  // =>
 
     // Special
     Eof,
@@ -345,6 +346,7 @@ impl fmt::Display for Token {
             Token::Semicolon => write!(f, ";"),
             Token::Colon => write!(f, ":"),
             Token::Question => write!(f, "?"),
+            Token::FatArrow => write!(f, "=>"),
             Token::Eof => write!(f, "<eof>"),
         }
     }

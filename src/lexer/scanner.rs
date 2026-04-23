@@ -513,6 +513,10 @@ impl<'a> Scanner<'a> {
                     _ => Token::EqEq,
                 }
             }
+            Some((_, '>')) => {
+                self.advance();
+                Token::FatArrow
+            }
             _ => Token::Eq,
         }
     }
