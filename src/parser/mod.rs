@@ -583,6 +583,70 @@ impl Parser {
             let key_name = self.expect_ident()?;
             let key_span = self.prev_span();
 
+            // Explicitly unsupported prefixes. `static` would need function-
+            // with-properties to model `Foo.bar()`; we have no inheritance
+            // or prototype chain either, so reject at parse time.
+            if key_name == "static" && matches!(self.current(), Token::Ident(_)) {
+                return Err(ParseError::UnexpectedToken {
+                    found: "static".to_string(),
+                    expected: "instance method (static class members are not supported; see examples/spa/gaps.md)".to_string(),
+                    span: key_span,
+                }
+                .into());
+            }
+
+            // `get name()` / `set name(param)` — accessor property. The
+            // body is a block just like a method; we emit PropDef::Getter /
+            // PropDef::Setter so the object-literal machinery types the
+            // result as the getter's return and the setter's assignment
+            // target.
+            if (key_name == "get" || key_name == "set")
+                && matches!(self.current(), Token::Ident(_))
+            {
+                let is_setter = key_name == "set";
+                let accessor_name = self.expect_ident()?;
+                self.expect(&Token::LParen)?;
+                let (params, prefix) = self.parse_parameters_with_prefix()?;
+                self.expect(&Token::RParen)?;
+                let body = Self::prepend_param_destructuring(
+                    self.parse_block_statement()?,
+                    prefix,
+                );
+                let member_span = Span::new(member_start, self.prev_span().end);
+                let accessor = if is_setter {
+                    if params.len() != 1 {
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("{} parameters", params.len()),
+                            expected: "exactly one parameter for a setter".to_string(),
+                            span: member_span,
+                        }
+                        .into());
+                    }
+                    PropDef::Setter {
+                        key: PropKey::Ident(accessor_name),
+                        param: params.into_iter().next().unwrap(),
+                        body: Box::new(body),
+                        span: member_span,
+                    }
+                } else {
+                    if !params.is_empty() {
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("{} parameters", params.len()),
+                            expected: "no parameters for a getter".to_string(),
+                            span: member_span,
+                        }
+                        .into());
+                    }
+                    PropDef::Getter {
+                        key: PropKey::Ident(accessor_name),
+                        body: Box::new(body),
+                        span: member_span,
+                    }
+                };
+                method_props.push(accessor);
+                continue;
+            }
+
             self.expect(&Token::LParen)?;
             let params = self.parse_parameters()?;
             self.expect(&Token::RParen)?;
