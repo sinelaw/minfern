@@ -119,6 +119,13 @@ impl InferState {
         env: &TypeEnv,
         stmts: &[Stmt],
     ) -> InferResult<(Type, TypeEnv)> {
+        // Track names declared via `const` in this scope to reject
+        // duplicate declarations, which are almost always bugs and match
+        // standard JS semantics for const. Synthesised destructuring
+        // temps (`$destr$N`) are skipped — they're uniquely generated
+        // per pattern and can't collide.
+        let mut const_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut result = Type::Undefined;
         let mut current_env = env.clone();
         let mut i = 0;
@@ -130,6 +137,28 @@ impl InferState {
                 }
                 current_env = self.infer_function_group(&current_env, &stmts[start..i])?;
             } else {
+                if let Stmt::Var {
+                    kind: VarKind::Const,
+                    declarations,
+                    ..
+                } = &stmts[i]
+                {
+                    for decl in declarations {
+                        if decl.name.starts_with("$destr$") {
+                            continue;
+                        }
+                        if !const_names.insert(decl.name.clone()) {
+                            return Err(TypeError::Module {
+                                message: format!(
+                                    "duplicate declaration of 'const {}' in the same scope",
+                                    decl.name
+                                ),
+                                span: decl.span,
+                            }
+                            .into());
+                        }
+                    }
+                }
                 let (ty, new_env) = self.infer_stmt(&current_env, &stmts[i])?;
                 result = ty;
                 current_env = new_env;
