@@ -103,6 +103,9 @@ impl InferState {
                 self.unify_array_with_row(span, elem, row)
             }
 
+            // Promises
+            (Type::Promise(i1), Type::Promise(i2)) => self.unify(span, i1, i2),
+
             // Maps
             (Type::Map(v1), Type::Map(v2)) => self.unify(span, v1, v2),
 

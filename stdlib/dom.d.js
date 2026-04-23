@@ -30,3 +30,10 @@ const clearInterval;
 
 /** const alert: (String) => Undefined */
 const alert;
+
+// fetch and its minimum useful Response shape. `.json()` returns
+// `Promise<T>` where T is polymorphic per call — callers usually
+// pass the parsed result to code that fixes its shape via further
+// property access.
+/** const fetch: (String) => Promise<{status: Number, ok: Boolean, statusText: String, url: String, json: () => Promise<T>, text: () => Promise<String>}> */
+const fetch;

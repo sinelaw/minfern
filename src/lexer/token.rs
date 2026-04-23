@@ -46,6 +46,8 @@ pub enum Token {
     Class,
     Extends,
     Super,
+    Async,
+    Await,
     If,
     Else,
     While,
@@ -181,6 +183,8 @@ impl Token {
                 | Token::Class
                 | Token::Extends
                 | Token::Super
+                | Token::Async
+                | Token::Await
                 | Token::If
                 | Token::Else
                 | Token::While
@@ -223,6 +227,8 @@ impl Token {
             "class" => Some(Token::Class),
             "extends" => Some(Token::Extends),
             "super" => Some(Token::Super),
+            "async" => Some(Token::Async),
+            "await" => Some(Token::Await),
             "function" => Some(Token::Function),
             "if" => Some(Token::If),
             "else" => Some(Token::Else),
@@ -268,6 +274,8 @@ impl fmt::Display for Token {
             Token::Class => write!(f, "class"),
             Token::Extends => write!(f, "extends"),
             Token::Super => write!(f, "super"),
+            Token::Async => write!(f, "async"),
+            Token::Await => write!(f, "await"),
             Token::Function => write!(f, "function"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),

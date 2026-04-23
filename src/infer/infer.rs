@@ -842,6 +842,11 @@ impl InferState {
                     return Ok(ty);
                 }
             }
+            Type::Promise(inner_ty) => {
+                if let Some(ty) = crate::builtins::promise_method_type(self, inner_ty, property) {
+                    return Ok(ty);
+                }
+            }
             Type::Row(row) => {
                 // If the property exists in the row, return its type directly
                 if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {
@@ -1010,6 +1015,16 @@ impl InferState {
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
                 self.unify(span, &arg_type, &Type::Number)?;
                 Ok(Type::Number)
+            }
+
+            UnaryOp::Await => {
+                // `await e` unwraps `Promise<T>` to `T`. A fresh inner type
+                // variable lets the unification succeed even when the
+                // argument's type is still a bare variable at this point;
+                // the shape `Promise<T>` pins it down either way.
+                let inner = self.fresh_type_var();
+                self.unify(span, &arg_type, &Type::promise(inner.clone()))?;
+                Ok(self.apply_subst(&inner))
             }
         }
     }

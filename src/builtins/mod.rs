@@ -202,6 +202,48 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
     })
 }
 
+/// Look up a built-in Promise prototype method.
+///
+/// `inner` is the `T` in `Promise<T>`. Each call produces a fresh function
+/// type so call sites don't unify their result types together.
+///
+/// `.then` here commits to the "callback must return a Promise" shape
+/// (`(T) => Promise<U>) => Promise<U>`) rather than the JS-spec
+/// `(T) => U | Promise<U>` form, because minfern has no union types.
+/// Users passing a plain-value callback should return `Promise.resolve(v)`
+/// or make the function `async`.
+pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -> Option<Type> {
+    Some(match method {
+        "then" => {
+            let u_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![Type::simple_func(
+                    vec![inner.clone()],
+                    Type::promise(u_var.clone()),
+                )],
+                Type::promise(u_var),
+            )
+        }
+        "catch" => {
+            // (error -> Promise<T>) -> Promise<T>. error is a fresh var
+            // since minfern has no single "Error" type.
+            let err_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![Type::simple_func(
+                    vec![err_var],
+                    Type::promise(inner.clone()),
+                )],
+                Type::promise(inner.clone()),
+            )
+        }
+        "finally" => Type::simple_func(
+            vec![Type::simple_func(vec![], Type::Undefined)],
+            Type::promise(inner.clone()),
+        ),
+        _ => return None,
+    })
+}
+
 impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.

@@ -165,6 +165,9 @@ impl Substitutable for Type {
             // Array types
             Type::Array(elem) => Type::Array(Box::new(elem.apply_subst(subst))),
 
+            // Promise types
+            Type::Promise(inner) => Type::Promise(Box::new(inner.apply_subst(subst))),
+
             // Map types
             Type::Map(value) => Type::Map(Box::new(value.apply_subst(subst))),
 

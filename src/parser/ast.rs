@@ -153,6 +153,7 @@ pub enum UnaryOp {
     Typeof, // typeof
     Void,   // void
     Delete, // delete
+    Await,  // await
 
     // Pre/Post increment/decrement
     PreInc,  // ++x

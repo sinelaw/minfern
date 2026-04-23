@@ -84,6 +84,15 @@ impl Parser {
             Token::Const => self.parse_var_declaration(VarKind::Const),
             Token::Function => self.parse_function_declaration(),
             Token::Class => self.parse_class_declaration(),
+            // `async function name(...) { body }` parses like a regular
+            // function declaration; `async` is consumed by the async-wrap
+            // helper which rewrites every `return` inside the body so the
+            // function's return type ends up as `Promise<T>`.
+            Token::Async if matches!(self.tokens.get(self.pos + 1).map(|s| &s.value), Some(Token::Function)) => {
+                self.advance(); // consume `async`
+                let decl = self.parse_function_declaration()?;
+                Ok(Self::make_async_function_decl(decl))
+            }
             Token::Import => self.parse_import_declaration(),
             Token::Export => self.parse_export_declaration(),
             Token::If => self.parse_if_statement(),
@@ -651,6 +660,74 @@ impl Parser {
             }
         }
         None
+    }
+
+    /// Wrap an `async function` declaration so its return type becomes
+    /// `Promise<T>`. The body is lifted into an IIFE and handed to
+    /// `Promise.resolve`, turning `async function foo(x) { return x + 1; }`
+    /// into `function foo(x) { return Promise.resolve((function() { return x + 1; })()); }`.
+    ///
+    /// Inference then types `foo` as `(T) => Promise<T>` with no extra
+    /// cases. `await e` inside the original body continues to be
+    /// expressed via `UnaryOp::Await`, which the inference rule for
+    /// unary ops turns into the inner type of its operand's `Promise<T>`.
+    fn make_async_function_decl(decl: Stmt) -> Stmt {
+        if let Stmt::FunctionDecl {
+            name,
+            params,
+            body,
+            type_annotation,
+            span,
+        } = decl
+        {
+            let new_body = Self::wrap_body_in_promise_resolve(body, span);
+            Stmt::FunctionDecl {
+                name,
+                params,
+                body: new_body,
+                type_annotation,
+                span,
+            }
+        } else {
+            decl
+        }
+    }
+
+    fn wrap_body_in_promise_resolve(body: Box<Stmt>, span: Span) -> Box<Stmt> {
+        // (function () { ...body... })()
+        let iife = Expr::Function {
+            name: None,
+            params: vec![],
+            body,
+            type_annotation: None,
+            span,
+        };
+        let iife_call = Expr::Call {
+            callee: Box::new(iife),
+            arguments: vec![],
+            span,
+        };
+        // Promise.resolve(<iife_call>)
+        let resolve_call = Expr::Call {
+            callee: Box::new(Expr::Member {
+                object: Box::new(Expr::Ident {
+                    name: "Promise".to_string(),
+                    span,
+                }),
+                property: "resolve".to_string(),
+                span,
+            }),
+            arguments: vec![iife_call],
+            span,
+        };
+        // { return <resolve_call>; }
+        Box::new(Stmt::Block {
+            body: vec![Stmt::Return {
+                argument: Some(resolve_call),
+                span,
+            }],
+            span,
+        })
     }
 
     fn parse_function_declaration(&mut self) -> Result<Stmt> {
@@ -1243,6 +1320,7 @@ impl Parser {
             Token::Typeof => Some(UnaryOp::Typeof),
             Token::Void => Some(UnaryOp::Void),
             Token::Delete => Some(UnaryOp::Delete),
+            Token::Await => Some(UnaryOp::Await),
             Token::PlusPlus => Some(UnaryOp::PreInc),
             Token::MinusMinus => Some(UnaryOp::PreDec),
             _ => None,
@@ -1773,6 +1851,11 @@ impl Parser {
             Token::Export => "export",
             Token::From => "from",
             Token::As => "as",
+            Token::Class => "class",
+            Token::Extends => "extends",
+            Token::Super => "super",
+            Token::Async => "async",
+            Token::Await => "await",
             _ => unreachable!("keyword_to_string called on non-keyword"),
         }
         .to_string()

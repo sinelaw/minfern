@@ -44,6 +44,9 @@ fn collect_hidden_this_vars_impl(ty: &Type, hidden: &mut HashSet<TVarName>) {
         Type::Array(elem) => {
             collect_hidden_this_vars_impl(elem, hidden);
         }
+        Type::Promise(inner) => {
+            collect_hidden_this_vars_impl(inner, hidden);
+        }
         Type::Map(value) => {
             collect_hidden_this_vars_impl(value, hidden);
         }

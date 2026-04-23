@@ -23,7 +23,7 @@ what changed and why.
 | 12| No `let`                                             | *resolved*   |
 | 13| No destructuring / spread / rest                     | *resolved* (partial) |
 | 14| No `class`                                           | *resolved* (partial) |
-| 14| No `async`/`await`                                   | open         |
+| 14| No `async`/`await`                                   | *resolved*   |
 | — | Inline `/*: T */` annotations not captured           | *resolved*   |
 | — | Missing Math methods (log/sin/cos/atan2/…)           | *resolved*   |
 | — | No `Object.keys`, `Array.isArray`                    | *resolved*   |
@@ -204,14 +204,30 @@ Not yet covered: `extends`/`super` (would need a prototype chain),
 static methods, getters/setters in class bodies, private fields, and
 constructor statements beyond `this.FIELD = EXPR;`.
 
-### 14b. No `async`/`await`
+### 14b. No `async`/`await` *(resolved)*
 
-A network-backed variant would need `fetch(...).then(...)` or
-`async`/`await`. Neither parses yet. `fetch` itself isn't in the
-stdlib either, and proper support would need a `Promise<T>` type
-(a new parameterised nominal type — minfern already has the
-machinery for it via `Array<T>`, but adding it still counts as
-a meaningful change).
+`Promise<T>` is a new parameterised nominal type alongside
+`Array<T>` and `Map<T>`. `async function foo(x) { ... return e; }`
+parses and desugars in the parser to
+`function foo(x) { return Promise.resolve((function() { ... return e; })()); }`,
+which types `foo` at `(T) => Promise<U>` with no new inference
+rules. `await e` is a unary operator whose type rule is "expect
+`Promise<T>`, produce `T`". `.then` / `.catch` / `.finally`
+dispatch as built-in methods on `Promise<T>` with fresh inner
+type variables per lookup. `fetch`, `Promise.resolve`,
+`Promise.reject`, `Promise.all` all ship in the stdlib.
+
+Trade-off forced by no-unions: `.then`'s callback must return
+`Promise<U>`, not `U | Promise<U>` like in JS. Passing a bare
+value errors with "expected Promise<a>, found Number"; users
+wrap with `Promise.resolve(x)` or make the callback itself
+`async`. The most common pattern is to chain `async` functions,
+so the cost is low in practice.
+
+Not enforced: `await` currently type-checks anywhere, not just
+inside `async function`. That's a parser-level concern (requires
+tracking "in async context") and doesn't affect soundness of
+the types produced.
 
 ## What's left in priority order
 

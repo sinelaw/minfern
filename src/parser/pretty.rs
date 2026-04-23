@@ -156,7 +156,10 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             }
             if prefix {
                 write!(w, "{}", op_str)?;
-                if matches!(op, UnaryOp::Typeof | UnaryOp::Void | UnaryOp::Delete) {
+                if matches!(
+                    op,
+                    UnaryOp::Typeof | UnaryOp::Void | UnaryOp::Delete | UnaryOp::Await
+                ) {
                     write!(w, " ")?;
                 }
                 // Wrap negative numbers to avoid --x being parsed as pre-decrement
@@ -774,6 +777,7 @@ fn unary_op_str(op: UnaryOp) -> (bool, &'static str) {
         UnaryOp::Typeof => (true, "typeof"),
         UnaryOp::Void => (true, "void"),
         UnaryOp::Delete => (true, "delete"),
+        UnaryOp::Await => (true, "await"),
         UnaryOp::PreInc => (true, "++"),
         UnaryOp::PreDec => (true, "--"),
         UnaryOp::PostInc => (false, "++"),

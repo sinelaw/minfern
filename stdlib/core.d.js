@@ -37,6 +37,13 @@ const Object;
 /** const Array: {isArray: (a) => Boolean} */
 const Array;
 
+// Promise constructor helpers. `resolve` and `reject` are both
+// polymorphic — each `Promise.resolve(x)` call instantiates T fresh —
+// which is exactly what the async desugaring needs to wrap the result
+// of an IIFE whose return type isn't known until inference finishes.
+/** const Promise: {resolve: (T) => Promise<T>, reject: (E) => Promise<T>, all: (Promise<T>[]) => Promise<T[]>} */
+const Promise;
+
 /** const parseInt: (String) => Number */
 const parseInt;
 

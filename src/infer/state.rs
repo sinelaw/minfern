@@ -125,6 +125,7 @@ impl InferState {
                     }
                 }),
             Type::Array(elem) => self.find_origin_in_type(elem),
+            Type::Promise(inner) => self.find_origin_in_type(inner),
             Type::Map(value) => self.find_origin_in_type(value),
             Type::Named(_, args) => args.iter().find_map(|a| self.find_origin_in_type(a)),
             _ => None,
@@ -365,6 +366,7 @@ impl InferState {
             }
 
             Type::Array(elem) => self.occurs_in_impl(var, elem),
+            Type::Promise(inner) => self.occurs_in_impl(var, inner),
             Type::Map(value) => self.occurs_in_impl(var, value),
 
             Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a)),
@@ -415,6 +417,7 @@ impl InferState {
             }
 
             Type::Array(elem) => self.is_inside_row_type_impl(var, elem, in_row),
+            Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
             Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
 
             _ => false,
