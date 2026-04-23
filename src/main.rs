@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
 
-use minfern::diagnostics::print_error;
+use minfern::diagnostics::{print_error, print_error_plain};
 use minfern::error::MinfernError;
 use minfern::infer::{decorate_with_types, InferState, TypeEnv};
 use minfern::lexer::{Scanner, Token};
@@ -19,12 +19,15 @@ struct Args {
     extra_libs: Vec<String>,
     /// Skip the built-in stdlib (core.d.js, dom.d.js).
     no_stdlib: bool,
+    /// Suppress ANSI color escapes in diagnostic output.
+    no_color: bool,
 }
 
 fn parse_args(raw: Vec<String>) -> Result<Args, String> {
     let mut input = None;
     let mut extra_libs = Vec::new();
     let mut no_stdlib = false;
+    let mut no_color = false;
 
     let mut iter = raw.into_iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -46,6 +49,9 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
             "--no-stdlib" => {
                 no_stdlib = true;
             }
+            "--no-color" | "--no-colour" => {
+                no_color = true;
+            }
             _ if arg.starts_with("--lib=") => {
                 extra_libs.push(arg["--lib=".len()..].to_string());
             }
@@ -65,6 +71,7 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
         input,
         extra_libs,
         no_stdlib,
+        no_color,
     })
 }
 
@@ -122,8 +129,16 @@ fn main() -> ExitCode {
         }
     };
 
+    let report = |path: &str, source: &str, error: &MinfernError| {
+        if args.no_color {
+            print_error_plain(path, source, error);
+        } else {
+            print_error(path, source, error);
+        }
+    };
+
     // Load any extra user-supplied lib files.
-    let (env, mut state) = match load_extra_libs(env, state, &args.extra_libs) {
+    let (env, mut state) = match load_extra_libs(env, state, &args.extra_libs, &report) {
         Ok(r) => r,
         Err(code) => return code,
     };
@@ -132,7 +147,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(errors) => {
             for error in errors {
-                print_error(&filename, &source, &error);
+                report(&filename, &source, &error);
             }
             ExitCode::from(1)
         }
@@ -143,6 +158,7 @@ fn load_extra_libs(
     mut env: TypeEnv,
     mut state: InferState,
     paths: &[String],
+    report: &dyn Fn(&str, &str, &MinfernError),
 ) -> Result<(TypeEnv, InferState), ExitCode> {
     for path in paths {
         let source = match fs::read_to_string(path) {
@@ -155,7 +171,7 @@ fn load_extra_libs(
         match load_lib(&mut state, env.clone(), &source) {
             Ok(new_env) => env = new_env,
             Err(e) => {
-                print_error(path, &source, &e);
+                report(path, &source, &e);
                 return Err(ExitCode::from(1));
             }
         }
@@ -174,6 +190,7 @@ USAGE:
 OPTIONS:
     --lib <path>         Load an additional declaration file (can be repeated)
     --no-stdlib          Skip the embedded core and DOM declarations
+    --no-color           Disable ANSI colors in diagnostic output
     -h, --help           Print help information
     -V, --version        Print version information
 
