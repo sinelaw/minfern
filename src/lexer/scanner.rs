@@ -16,6 +16,9 @@ pub struct Scanner<'a> {
     /// Stack of template literal depth (for nested templates)
     /// When > 0, a `}` should be scanned as template continuation
     template_depth: usize,
+    /// Most recently emitted identifier and its end position, used to
+    /// attach inline `/*: T */` annotations to the name that precedes them.
+    last_ident: Option<(String, usize)>,
 }
 
 impl<'a> Scanner<'a> {
@@ -27,6 +30,7 @@ impl<'a> Scanner<'a> {
             type_annotations: Vec::new(),
             last_token_allows_regex: true, // At start of file, / is regex
             template_depth: 0,
+            last_ident: None,
         }
     }
 
@@ -189,6 +193,11 @@ impl<'a> Scanner<'a> {
         };
 
         self.update_regex_context(&token);
+        // Remember the last identifier so a following inline `/*: T */`
+        // annotation can be attached to it.
+        if let Token::Ident(name) = &token {
+            self.last_ident = Some((name.clone(), self.current_pos));
+        }
         Ok(Spanned::new(token, Span::new(start, self.current_pos)))
     }
 
@@ -234,6 +243,23 @@ impl<'a> Scanner<'a> {
                             let start = self.current_pos;
                             self.advance(); // /
                             self.advance(); // *
+
+                            // Inline `/*: T */` annotation: attaches to the
+                            // most recently emitted identifier.
+                            if self.peek().map(|(_, c)| c == ':').unwrap_or(false) {
+                                self.advance(); // consume ':'
+                                self.skip_whitespace();
+                                let content = self.read_until_comment_end();
+                                self.consume_comment_end();
+                                if let Some((name, _)) = self.last_ident.clone() {
+                                    self.type_annotations.push(TypeAnnotation {
+                                        name,
+                                        content: content.trim().to_string(),
+                                        span: Span::new(start, self.current_pos),
+                                    });
+                                }
+                                continue;
+                            }
 
                             // Check if this is a doc comment /**
                             if self.peek().map(|(_, c)| c == '*').unwrap_or(false) {
