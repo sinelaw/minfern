@@ -1,57 +1,60 @@
 # Gaps found while writing a minfern-checked SPA
 
-This is the list of minfern limitations I ran into while writing the todo-list
-example in this directory. Each one is either a workaround that had to be
-applied to keep the JS both type-checkable and runnable in a browser, or
-something I'd have reached for as a React-style JS dev and had to rewrite.
+This started as the list of minfern limitations encountered while writing
+the todo-list example in this directory. Several of them have since been
+fixed — those entries are marked *(resolved)* and kept as a record of
+what changed and why.
 
-Where applicable I note the fix I used in `app.js`.
+## Status summary
 
-## Blockers that forced structural rewrites
+| # | Gap                                                  | Status       |
+|---|------------------------------------------------------|--------------|
+| 1 | No function hoisting                                 | *resolved*   |
+| 2 | `const x /*: T */;` runtime-unsafe                   | *resolved*   |
+| 3 | No nullability / optional types                      | open         |
+| 4 | No built-in DOM / `window` / event types             | *resolved*   |
+| 5 | No String methods                                    | *resolved*   |
+| 6 | No Array methods                                     | *resolved*   |
+| 7 | `String` and `String[]` collide under indexing       | open         |
+| 8 | Generic row-polymorphic helpers "forget" fields      | open         |
+| 9 | Control-flow-dependent return typing is strict       | open         |
+| 10| No ergonomic way to seed an empty typed collection   | open         |
+| 11| No arrow functions                                   | *resolved*   |
+| 12| No `let`                                             | *resolved*   |
+| 13| No destructuring / spread / rest                     | open         |
+| 14| No `class`, `async`/`await`                          | open         |
 
-### 1. No function hoisting
+## Resolved
 
-```js
-function outer() { return inner(); }   // Error: Undefined variable: 'inner'
-function inner() { return 1; }
-```
+### 1. No function hoisting *(resolved)*
 
-Standard JavaScript hoists `function` declarations, so this works. minfern
-resolves names strictly in source order, which also rules out mutual
-recursion between two top-level functions.
+Previously, `function outer() { return inner(); } function inner() {...}`
+failed with `Undefined variable: 'inner'` because minfern resolved names
+strictly in source order. Mutual recursion between peer functions was
+equivalently blocked. The SPA's original workaround was a mutable
+`var doRender = function () { ... };` placeholder rewritten at the bottom
+of the file.
 
-**Workaround used in `app.js`**: a mutable `var doRender = function () { ... };`
-placeholder near the top of the file, overwritten with the real renderer
-after every function that `doRender` transitively references has been
-defined. Every event handler calls `doRender()` rather than `render()`.
+`infer_stmt_list` now packs adjacent `function` declarations into a
+binding group and processes each group in two passes (hoist names with
+fresh type variables, infer all bodies, generalise afterwards). Forward
+references and mutual recursion between peers now type-check. The SPA
+drops the `doRender` placeholder.
 
 ### 2. `const foo /*: T */;` without an initializer is a runtime syntax error *(resolved)*
 
-Previously, `declare.md` recommended `const document /*: T */;` as the
-external-declaration syntax, which is a `SyntaxError` in browsers. The SPA's
-original workaround was `var document /*: T */;` (a no-op `var` that doesn't
-overwrite the existing global).
+`const x;` is a `SyntaxError` in every browser, so a file using it can
+be type-checked but never loaded as a `<script>`. The SPA's workaround
+was `var document /*: T */;`, which has its own fragility.
 
-This is now resolved by the `stdlib/` approach (see gap 4): the `const x;`
-forms live in `stdlib/*.d.js`, which the type checker parses but no
-JavaScript runtime ever sees. The SPA no longer declares anything —
-`document` comes from the embedded stdlib.
+Resolved by the `stdlib/` approach (see gap 4): the `const x;` forms
+live in `stdlib/*.d.js`, which the type checker parses but no JavaScript
+runtime ever sees.
 
-The related limitation that `/*: T */` inline annotations (as sketched in
-`declare.md`) aren't actually captured by the scanner still stands — only
-`/** var x: T */` doc-comment annotations are. The stdlib files use the
-doc-comment form.
-
-### 3. No way to say "might be null"
-
-There are no union types and no optional properties, so there's no way to
-type `getElementById: (String) => Element | Null`. The declaration in
-`app.js` pretends `getElementById` always succeeds. At runtime this is
-fine for IDs we control, but it means minfern cannot protect against
-typos like `getElementById("todo-lsit")`.
-
-Related: `arr.find(...)`, `obj[missingKey]`, `JSON.parse` of arbitrary
-input, any "not found" sentinel at all.
+The related limitation that `/*: T */` inline annotations (as sketched
+in `declare.md`) aren't actually captured by the scanner still stands —
+only `/** var x: T */` doc-comment annotations are. The stdlib files
+use the doc-comment form.
 
 ### 4. No built-in DOM / `window` / event types *(resolved)*
 
@@ -64,128 +67,121 @@ load additional user libs, or `--no-stdlib` to skip the built-in ones.
 Still imperfect: the DOM types are a deliberately simplified subset —
 `getElementById` returns one flat "Element" shape with all the fields
 the SPA uses, because without union types there's no way to distinguish
-`HTMLInputElement` from `HTMLDivElement`. Many `Math` / `Array` /
-`String` methods are still missing (gaps 5 and 6).
+`HTMLInputElement` from `HTMLDivElement`.
 
-## Missing standard-library methods
+### 5. No String methods *(resolved)*
 
-These are also covered in `missing-builtins.md`; the SPA hit them concretely.
+`escapeHtml` originally looped character-by-character because
+`s.replaceAll`, `s.split`, `s.indexOf` and friends were all undeclared.
+After the built-in method dispatch in `builtins/mod.rs::string_method_type`,
+the SPA's `escapeHtml` is now a five-line `.replaceAll` chain.
 
-### 5. No String methods
+Covers `indexOf`, `lastIndexOf`, `substring`, `substr`, `slice`, `split`,
+`trim`, `trimStart`, `trimEnd`, `replace`, `replaceAll`, `toUpperCase`,
+`toLowerCase`, `charAt`, `charCodeAt`, `startsWith`, `endsWith`,
+`includes`, `repeat`, `padStart`, `padEnd`, `concat`, `toString`.
 
-`escapeHtml` in `app.js` has to loop character-by-character because
-`s.replace`, `s.split`, `s.replaceAll`, `s.toLowerCase` and friends are
-all unavailable. For a UI-oriented SPA this is the most frequently painful
-gap — even a non-regex `String.prototype.replace(String, String)` would
-cover most of it.
+### 6. No Array methods *(resolved)*
 
-### 6. No Array methods
+`push`, `pop`, `map`, `filter`, `forEach`, `reduce`, etc. now dispatch
+through `builtins/mod.rs::array_method_type`, which hands out a fresh
+function type per lookup — polymorphic methods like `map`/`reduce` get a
+fresh accumulator or result-element variable so each call site infers
+independently.
 
-No `push`, `pop`, `map`, `filter`, `slice`, `concat`, `find`, `includes`,
-`forEach`, `splice`, etc. The SPA appends with `arr[arr.length] = x` and
-implements `filter` as a hand-rolled `for`-loop in `deleteTodo`/`clearDone`.
-Anything resembling functional update ("produce a new array with this item
-changed") becomes a multi-line loop.
+The SPA's `deleteTodo`, `clearDone`, `countRemaining`, `hasAnyDone`,
+`renderList`, and all the per-item handler factories collapsed from
+loop-based to one-liners (`state.todos.filter(t => t.id !== id)` etc.).
 
-## Type-system papercuts
+`find` is typed `(T => Boolean) => T` — minfern has no union types, so
+"not found" at runtime returns `undefined` regardless of the declared
+type. Same trade-off `getElementById` makes.
+
+### 11. No arrow functions *(resolved)*
+
+`(x) => x + 1`, `x => x + 1`, `() => body`, and `{ ... }` block bodies
+all parse now. The parser lowers arrows to `Expr::Function` with
+`name: None`, so inference/decoration/printing are unchanged.
+
+Not modelled: `this` binding. Arrow functions in JS inherit the
+enclosing `this`; minfern's function handler re-creates a fresh `this`
+variable for every function regardless. The SPA happens not to care.
+
+### 12. No `let` *(resolved)*
+
+`let` now parses as an alias for `var`. Per-block scoping and the
+temporal-dead-zone aren't modelled (a `let` inside a `for` still shares
+one binding across iterations for inference purposes) but the statement
+parses and the types fall out correctly.
+
+## Open gaps
+
+### 3. No way to say "might be null"
+
+There are no union types and no optional properties, so there's no way
+to type `getElementById: (String) => Element | Null`. The shipped DOM
+library pretends `getElementById` always succeeds. At runtime this is
+fine for IDs we control, but it means minfern cannot catch typos like
+`getElementById("todo-lsit")`.
+
+Related: `arr.find(...)`, `obj[missingKey]`, `JSON.parse` of arbitrary
+input, any "not found" sentinel at all. This is the one gap that genuinely
+needs a type-system extension (unions, options, or an explicit `?T` sugar).
 
 ### 7. `String` and `String[]` collide under structural indexing
 
-`escapeHtml(s)` only uses `s.length` and `s[i]`, which both a `String`
-and a `String[]` satisfy identically (`.length: Number`, `[Number] -> String`),
-so minfern defaulted the parameter to `String[]`. Calling the function
-with a string literal in isolation then failed with
-`expected 'String[]', found 'String'`. Oddly, inside the full app the same
-code type-checked successfully even though the displayed signature was
-still `(String[]) => String`, which suggests there's also a soundness
-hole around when that row is unified.
-
-**Workaround used in `app.js`**: add `var out = "" + s;` at the top of
-`escapeHtml` to fire the `Plus` type-class and pin `s` to `String`.
+A function that only uses `s.length` and `s[i]` satisfies both `String`
+and `String[]` identically, so minfern picks one by unification order
+and may default wrongly. The workaround is to throw a `"" + s` into the
+body to trigger the `Plus` type-class and pin it to `String`. Now that
+`String.prototype` methods dispatch directly (gap 5), most real code
+touches at least one string-specific method and the ambiguity never
+fires — but a pure `length`/`[i]` function still has the problem.
 
 ### 8. Generic row-polymorphic helpers "forget" fields
 
-```js
-function removeById(arr, id) {
-    var result = [];
-    for (var i = 0; i < arr.length; i++) {
-        if (arr[i].id !== id) { result[result.length] = arr[i]; }
-    }
-    return result;
-}
-
-var filtered = removeById(todos, 1);
-var t = filtered[0].text;   // inferred as a free variable, not String
-```
-
-The function is inferred at `<a, b>({id: b | a}[], b) => {id: b | a}[]`, but
-when called with the concrete todo array the returned element's `text`
-field comes back as a fresh type variable rather than `String`. The fix
-used in `app.js` was to drop the generic helper and inline a
-todo-specific loop so the row type stays concrete.
+A polymorphic helper `function removeById(arr, id)` is inferred at
+`<a, b>({id: b | a}[], b) => {id: b | a}[]`, but when called with a
+concrete todo array the returned element's `text` field comes back as
+a free type variable rather than `String`. The workaround is to inline
+the helper (lose the generic). Needs attention in the inference engine.
 
 ### 9. Control-flow-dependent return typing is strict
 
 Any non-trailing branch that uses a bare `return;` forces the whole
 function's return type to `Undefined`, and the trailing path must then
-also return `undefined` explicitly. Writing `return;` / `return undefined;`
-by hand at the end of every event handler is a notable amount of
-boilerplate; JavaScript programmers normally don't.
+also return `undefined` explicitly. Handler bodies still need an explicit
+`return undefined;` at the end (see `app.js` event handlers).
 
 ### 10. No ergonomic way to seed an empty typed collection
 
 ```js
 var todos = [];           // a[]
-todos[0] = {id: 1, ...};  // now locks in the type, but until then the
-                          // whole file risks unifying against a[]
+todos[0] = {...};         // locks in the type
 ```
 
 The SPA avoids this by seeding `state.todos` with two entries at init.
-For a production app you'd want an "empty but already typed" array —
-either a type annotation (`var todos /*: Todo[] */ = [];`) or a way to
-write a type alias.
-
-## Ergonomic gaps ("wouldn't have to think about this in React")
-
-### 11. No arrow functions
-
-Every closure is `function () { ... return undefined; }`. Per-item handler
-factories (`makeToggleHandler`, etc.) exist mostly to close over a loop
-variable; `let` or an arrow-plus-`forEach` would have made half of them
-unnecessary.
-
-### 12. No `let`
-
-`for (let i ...)` would have avoided the loop-variable-capture pattern
-(`makeToggleHandler(id)`) entirely. Every loop in `app.js` has to either
-go through a factory function or do the IIFE `(function(x){ return ... })(x)`
-dance.
+For a production app you'd want either an annotation
+(`var todos /*: Todo[] */ = [];`) or a type alias.
 
 ### 13. No destructuring / spread / rest
 
-`deleteTodo` and `clearDone` would have been one line each with
-`state.todos = state.todos.filter(...)`. Instead they're hand-rolled
-for-loops (also blocked by gap 6, of course).
+`let {id, text} = todo;` and `const rest = [...tail];` would simplify
+about a dozen sites in the SPA. Pure parser work but not done.
 
-### 14. No `class`, no `async`/`await`
+### 14. No `class`, `async`/`await`
 
-Not used in this SPA, but a realistic app needs `fetch(...).then(...)`
-or the `async/await` sugar. Without either, a network-backed variant
-would need a callback-style workaround, and `fetch` itself isn't in the
-initial env (gap 4).
+A network-backed variant would need `fetch(...).then(...)` or
+`async`/`await`. Neither parses. `fetch` itself isn't in the stdlib
+either.
 
-## Summary
+## What's left in priority order
 
-The todo-list SPA is feasible to write in minfern but the story is
-roughly: "plus declarations for every DOM surface, minus a couple of
-idioms per function, plus a forward-reference hack for render". A minfern
-suitable for writing SPAs day-to-day would most want, in rough priority
-order:
-
-1. A real DOM environment shipped with the type checker (gap 4),
-   which also closes gap 2.
-2. `Array.prototype` + `String.prototype` built-ins (gaps 5, 6).
-3. Function hoisting (gap 1) or first-class mutual recursion.
-4. Some way to express nullability without full union types (gap 3) —
-   even a `?T` sugar desugared to a tagged option would be a huge win.
-5. `let` and arrow functions (gaps 11, 12).
+1. **Nullability** (gap 3) — the one open gap that actually blocks idioms
+   like `getElementById` safety, `find` results, and `JSON.parse`.
+2. **Destructuring / spread / rest** (gap 13) — pure parser work, big
+   readability win.
+3. **`async`/`await`** (gap 14) — needs a `Promise<T>` built-in plus a
+   parser arm; the rest falls out of existing generics.
+4. **Inference polish** (gaps 7, 8, 9, 10) — smaller scope but each one
+   removes a footgun.
