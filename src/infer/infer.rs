@@ -826,14 +826,22 @@ impl InferState {
     ) -> InferResult<Type> {
         // Handle built-in properties for arrays and strings
         match obj_type {
-            Type::Array(_) => match property {
-                "length" => return Ok(Type::Number),
-                _ => {}
-            },
-            Type::String => match property {
-                "length" => return Ok(Type::Number),
-                _ => {}
-            },
+            Type::Array(elem_ty) => {
+                if property == "length" {
+                    return Ok(Type::Number);
+                }
+                if let Some(ty) = crate::builtins::array_method_type(self, elem_ty, property) {
+                    return Ok(ty);
+                }
+            }
+            Type::String => {
+                if property == "length" {
+                    return Ok(Type::Number);
+                }
+                if let Some(ty) = crate::builtins::string_method_type(self, property) {
+                    return Ok(ty);
+                }
+            }
             Type::Row(row) => {
                 // If the property exists in the row, return its type directly
                 if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {
