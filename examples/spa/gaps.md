@@ -21,13 +21,18 @@ what changed and why.
 | 10| No ergonomic way to seed an empty typed collection   | *resolved*   |
 | 11| No arrow functions                                   | *resolved*   |
 | 12| No `let`                                             | *resolved*   |
-| 13| No destructuring / spread / rest                     | *resolved* (partial) |
-| 14| No `class`                                           | *resolved* (partial) |
+| 13| No destructuring / spread / rest                     | *resolved* (spread/rest open) |
+| 14| No `class`                                           | *resolved* (no prototype chain — by design) |
 | 14| No `async`/`await`                                   | *resolved*   |
 | — | Inline `/*: T */` annotations not captured           | *resolved*   |
+| — | Per-field annotations on object literals             | *resolved*   |
 | — | Missing Math methods (log/sin/cos/atan2/…)           | *resolved*   |
 | — | No `Object.keys`, `Array.isArray`                    | *resolved*   |
 | — | No module resolution (`import`/`export`)             | *resolved*   |
+| — | `await` outside an async function                    | *resolved* (now errors at parse time) |
+| — | Duplicate `const` in the same scope                  | *resolved* (now errors) |
+| — | Arrow `this` inheritance / `let` per-iteration / `var` function-scope | **out of scope** (see "By design" below) |
+| — | `class extends` / `super` / static methods / private fields | **out of scope** (see "By design" below) |
 
 ## Resolved
 
@@ -303,3 +308,58 @@ example stop running without a local HTTP server. A minimal
 multi-file project demonstrating import/export lives in
 `examples/modules/` — type-check with
 `minfern examples/modules/app.js`.
+
+## By design (not going to fix)
+
+A handful of JavaScript features are deliberately outside the scope
+of minfern. Marking them explicitly so they don't keep showing up
+as "open" on the gap list.
+
+**Prototype chain and anything that rides on it.** minfern has no
+inheritance model. Classes lower to factory functions returning an
+object literal; that literal has no `__proto__`, no constructor
+link, no dynamic dispatch through `prototype`. Consequently:
+
+ * `class Child extends Parent` — no way to express "Child's
+   instance is also a Parent-shaped thing" without subtyping, which
+   we don't have.
+ * `super(...)` / `super.method()` — same root.
+ * `static` class members — modelling `Foo.bar` requires
+   function-with-properties (a function value that also carries a
+   row of static fields). We reject `static` at parse time with a
+   pointer here.
+ * `Object.prototype` / `Array.prototype` patching — user code
+   can't walk prototypes because there aren't any to walk.
+ * Private fields (`#foo`) — tied to class identity, which doesn't
+   exist.
+ * Instance-of checks (`instanceof`) — the operator parses but
+   always types as Boolean; there's no real check.
+
+**Dynamic `this` semantics.** A function's `this` is a fresh type
+variable in the current inference rule, the same for every call.
+So:
+
+ * Arrow functions don't inherit enclosing `this` distinctly from
+   regular functions (both currently get a fresh `this` variable).
+ * `.call` / `.apply` / `.bind` to rebind `this` isn't type-checked.
+ * Method detachment (`let f = obj.method; f()`) loses the `this`
+   binding at runtime; minfern doesn't warn because it has no
+   notion of "bound to a receiver".
+
+**`let` per-iteration binding and the temporal-dead-zone.** `let`
+parses and lowers to the same AST node as `var`; minfern treats
+both as block-scoped for the purposes of where the name is visible
+but doesn't model per-iteration bindings in a `for (let i ...)`
+loop or the TDZ where referring to a `let` before its declaration
+throws. These are runtime semantics irrelevant to types the way
+minfern uses them.
+
+**`var` being function-scoped, not block-scoped.** `var` inside a
+nested block is visible outside that block at runtime; minfern
+treats it as block-scoped, which is an over-approximation — the
+false positives it produces are strict-but-sound.
+
+If any of these become interesting enough to reconsider, the
+minimum additions required are listed above: nominal class types
+for inheritance, function-with-properties for static members,
+`this`-aware inference for arrow rebinding.
