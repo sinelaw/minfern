@@ -102,16 +102,123 @@ impl InferState {
         env: &TypeEnv,
         program: &Program,
     ) -> InferResult<(Type, TypeEnv)> {
+        self.infer_stmt_list(env, &program.statements)
+    }
+
+    /// Infer a list of statements with function-declaration hoisting.
+    ///
+    /// Groups adjacent `function` declarations into a single binding group
+    /// and processes them together (hoist → infer bodies → generalise) so
+    /// mutual recursion and forward references between peers in the same
+    /// group type-check correctly. Non-function statements break up the
+    /// groups and are inferred in the usual left-to-right order, which
+    /// matches JavaScript's evaluation order for anything that isn't a
+    /// `function` declaration.
+    pub(crate) fn infer_stmt_list(
+        &mut self,
+        env: &TypeEnv,
+        stmts: &[Stmt],
+    ) -> InferResult<(Type, TypeEnv)> {
         let mut result = Type::Undefined;
         let mut current_env = env.clone();
+        let mut i = 0;
+        while i < stmts.len() {
+            if matches!(stmts[i], Stmt::FunctionDecl { .. }) {
+                let start = i;
+                while i < stmts.len() && matches!(stmts[i], Stmt::FunctionDecl { .. }) {
+                    i += 1;
+                }
+                current_env = self.infer_function_group(&current_env, &stmts[start..i])?;
+            } else {
+                let (ty, new_env) = self.infer_stmt(&current_env, &stmts[i])?;
+                result = ty;
+                current_env = new_env;
+                i += 1;
+            }
+        }
+        Ok((result, current_env))
+    }
 
-        for stmt in &program.statements {
-            let (ty, new_env) = self.infer_stmt(&current_env, stmt)?;
-            result = ty;
-            current_env = new_env;
+    /// Infer a run of adjacent `function` declarations as a single
+    /// binding group. Every name in the group is visible in every
+    /// body from the start, which is what enables forward references
+    /// and mutual recursion.
+    fn infer_function_group(&mut self, env: &TypeEnv, group: &[Stmt]) -> InferResult<TypeEnv> {
+        let mut hoisted = self.hoist_function_names(env, group);
+
+        // Pass 1: infer every body with the full hoisted env in scope, then
+        // unify each function's type with its hoisted variable. Bindings
+        // stay monomorphic here so peer references (still type variables at
+        // this point) get filled in as their own bodies are processed.
+        for stmt in group {
+            if let Stmt::FunctionDecl {
+                name,
+                params,
+                body,
+                type_annotation,
+                span,
+            } = stmt
+            {
+                let func_var = hoisted
+                    .lookup(name)
+                    .expect("hoisted name must be in env")
+                    .ty()
+                    .clone();
+                let func_type = self.infer_function(
+                    &hoisted,
+                    Some(name),
+                    params,
+                    body,
+                    type_annotation,
+                    *span,
+                )?;
+                self.unify(*span, &func_var, &func_type)?;
+                self.record_decl_type(*span, func_type);
+            }
         }
 
-        Ok((result, current_env))
+        // Pass 2: every function in the group now has a fully resolved
+        // monomorphic type sitting under its hoisted variable. Generalise
+        // each against the *outer* env's free variables so all peers
+        // receive the same polymorphism.
+        let base_free = env.free_vars();
+        for stmt in group {
+            if let Stmt::FunctionDecl { name, .. } = stmt {
+                let ty = hoisted
+                    .lookup(name)
+                    .expect("function must be in env after pass 1")
+                    .ty()
+                    .clone();
+                let ty = self.apply_subst(&ty);
+                let scheme = self.generalize(&base_free, &ty);
+                hoisted = hoisted.extend(name.clone(), scheme);
+            }
+        }
+
+        Ok(hoisted)
+    }
+
+    /// Pre-bind every top-level `function` declaration in `stmts` to a fresh
+    /// type variable so they can refer to each other before being defined.
+    ///
+    /// This matches JavaScript's "hoisting" behaviour: function declarations
+    /// (unlike function *expressions*) are visible throughout the enclosing
+    /// scope from the moment the scope is entered. The inference side-effect
+    /// is that two top-level functions can now call each other mutually,
+    /// and a function can call a peer that appears later in the file.
+    ///
+    /// Each hoisted name is stored as a monomorphic binding so the
+    /// `Stmt::FunctionDecl` handler can detect it and unify the hoisted
+    /// variable with the inferred function type.
+    pub(crate) fn hoist_function_names(&mut self, env: &TypeEnv, stmts: &[Stmt]) -> TypeEnv {
+        let mut new_env = env.clone();
+        for stmt in stmts {
+            if let Stmt::FunctionDecl { name, .. } = stmt {
+                let var = self.fresh_type_var();
+                new_env = new_env.extend(name.clone(), TypeScheme::mono(var));
+            }
+        }
+        new_env
     }
 
     /// Infer the type of an expression.
@@ -1242,15 +1349,10 @@ impl InferState {
     pub fn infer_stmt(&mut self, env: &TypeEnv, stmt: &Stmt) -> InferResult<(Type, TypeEnv)> {
         match stmt {
             Stmt::Block { body, .. } => {
-                let mut result = Type::Undefined;
-                let mut current_env = env.clone();
-
-                for s in body {
-                    let (ty, new_env) = self.infer_stmt(&current_env, s)?;
-                    result = ty;
-                    current_env = new_env;
-                }
-
+                // Function declarations inside a block are hoisted within
+                // the block, so we reuse the same grouping logic the
+                // top-level program uses.
+                let (result, _inner_env) = self.infer_stmt_list(env, body)?;
                 // Block introduces a new scope, so we return the original env
                 Ok((result, env.clone()))
             }
@@ -1552,8 +1654,14 @@ impl InferState {
                 type_annotation,
                 span,
             } => {
-                // Pre-bind the function name for recursion
-                let func_var = self.fresh_type_var();
+                // Reuse the type variable hoisted by the enclosing scope if
+                // this function was pre-bound there, otherwise start fresh.
+                // Re-using the hoisted var is what lets mutually recursive
+                // functions see each other's inferred types.
+                let func_var = match env.lookup(name) {
+                    Some(scheme) if scheme.is_mono() => scheme.ty().clone(),
+                    _ => self.fresh_type_var(),
+                };
                 let pre_env = env.extend(name.clone(), TypeScheme::mono(func_var.clone()));
 
                 // Infer the function type
