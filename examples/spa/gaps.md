@@ -25,24 +25,22 @@ placeholder near the top of the file, overwritten with the real renderer
 after every function that `doRender` transitively references has been
 defined. Every event handler calls `doRender()` rather than `render()`.
 
-### 2. `const foo /*: T */;` without an initializer is a runtime syntax error
+### 2. `const foo /*: T */;` without an initializer is a runtime syntax error *(resolved)*
 
-`declare.md` recommends
+Previously, `declare.md` recommended `const document /*: T */;` as the
+external-declaration syntax, which is a `SyntaxError` in browsers. The SPA's
+original workaround was `var document /*: T */;` (a no-op `var` that doesn't
+overwrite the existing global).
 
-```js
-const document /*: { getElementById: (String) => Element } */;
-```
+This is now resolved by the `stdlib/` approach (see gap 4): the `const x;`
+forms live in `stdlib/*.d.js`, which the type checker parses but no
+JavaScript runtime ever sees. The SPA no longer declares anything —
+`document` comes from the embedded stdlib.
 
-for external type declarations. That is a `SyntaxError: Missing initializer
-in const declaration` in every JavaScript runtime, so a file using it can
-be type-checked but never loaded as a `<script>`. `var document /*: T */;`
-is treated by minfern as an immutable declaration and *is* legal runtime
-JS (a `var` without an initializer doesn't replace an existing global), so
-that's what `app.js` uses. This is fragile — inside a module or in strict
-mode it would shadow the real `document`.
-
-A saner design would be a built-in DOM environment (see gap 4) or a
-dedicated declaration syntax that the runtime can safely ignore.
+The related limitation that `/*: T */` inline annotations (as sketched in
+`declare.md`) aren't actually captured by the scanner still stands — only
+`/** var x: T */` doc-comment annotations are. The stdlib files use the
+doc-comment form.
 
 ### 3. No way to say "might be null"
 
@@ -55,17 +53,19 @@ typos like `getElementById("todo-lsit")`.
 Related: `arr.find(...)`, `obj[missingKey]`, `JSON.parse` of arbitrary
 input, any "not found" sentinel at all.
 
-### 4. No built-in DOM / `window` / `console.error` / event types
+### 4. No built-in DOM / `window` / event types *(resolved)*
 
-minfern's initial environment has `console.log`, `Math`, `JSON`, a few
-numeric coercions, and nothing else. Every DOM surface has to be redeclared
-inline in the user's file, which both bloats the file and means every user
-re-invents a slightly different half-right DOM shape. It also forces gap 2:
-you need to declare `document` *somehow*, and the only runtime-safe spelling
-is a bare `var document;`.
+minfern now ships `stdlib/core.d.js` and `stdlib/dom.d.js`, baked into
+the binary via `include_str!` and auto-loaded before every user program.
+Users get `document`, `window`, `console`, `Math`, `JSON`, `setTimeout`,
+etc. without writing any declarations themselves. Pass `--lib <path>` to
+load additional user libs, or `--no-stdlib` to skip the built-in ones.
 
-I'd suggest either a pre-baked `dom.d.js` (with real module resolution) or
-a `--lib dom` flag that seeds the initial environment.
+Still imperfect: the DOM types are a deliberately simplified subset —
+`getElementById` returns one flat "Element" shape with all the fields
+the SPA uses, because without union types there's no way to distinguish
+`HTMLInputElement` from `HTMLDivElement`. Many `Math` / `Array` /
+`String` methods are still missing (gaps 5 and 6).
 
 ## Missing standard-library methods
 

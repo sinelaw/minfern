@@ -9,30 +9,10 @@
 //     minfern examples/spa/app.js
 
 // ---------------------------------------------------------------------------
-// DOM type declarations.
-//
-// minfern has no built-in DOM types, so we describe the subset we use as an
-// immutable declaration. `const x /*: T */;` (no initializer) binds `x` to
-// the runtime-provided value (here, the real browser `document`) while
-// telling the type checker its shape.
+// DOM types come from minfern's embedded stdlib (stdlib/dom.d.js), which is
+// auto-loaded by the type checker. At runtime the browser supplies the real
+// `document` global. No local declaration needed.
 // ---------------------------------------------------------------------------
-
-// `var` with a type annotation and no initializer is treated as a `const`
-// declaration by minfern (see declare.md). At runtime, a bare `var document;`
-// at script scope is a harmless no-op that leaves the browser's global
-// `document` untouched, so the same file is a valid type declaration for
-// minfern and a valid script for the browser.
-var document /*: {
-    getElementById: (String) => {
-        value: String,
-        textContent: String,
-        innerHTML: String,
-        className: String,
-        onclick: () => Undefined,
-        oninput: () => Undefined,
-        onkeydown: ({key: String}) => Undefined
-    }
-} */;
 
 // ---------------------------------------------------------------------------
 // State.

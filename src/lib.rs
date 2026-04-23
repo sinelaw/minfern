@@ -15,6 +15,7 @@ pub mod error;
 pub mod infer;
 pub mod lexer;
 pub mod parser;
+pub mod stdlib;
 pub mod types;
 
 #[cfg(feature = "wasm")]

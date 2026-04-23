@@ -11,83 +11,14 @@ use crate::lexer::Span;
 use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
 
 /// Create the initial type environment with built-in bindings.
+///
+/// Only bindings that need to be truly polymorphic (each lookup instantiates
+/// fresh type variables) live here. Non-polymorphic bindings — `console`,
+/// `Math`, `JSON`, `parseInt`, `parseFloat`, `isNaN`, `isFinite` and the DOM
+/// surface — are declared in `stdlib/*.d.js` and loaded via
+/// [`crate::stdlib::initial_env_with_stdlib`].
 pub fn initial_env() -> TypeEnv {
     let mut env = TypeEnv::empty();
-
-    // console object with log method
-    let console_type = Type::object([
-        (
-            "log",
-            Type::simple_func(vec![Type::flex(100)], Type::Undefined),
-        ),
-        (
-            "error",
-            Type::simple_func(vec![Type::flex(101)], Type::Undefined),
-        ),
-        (
-            "warn",
-            Type::simple_func(vec![Type::flex(102)], Type::Undefined),
-        ),
-    ]);
-    env = env.extend("console".to_string(), TypeScheme::mono(console_type));
-
-    // Math object
-    let math_type = Type::object([
-        ("PI", Type::Number),
-        ("E", Type::Number),
-        ("abs", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("floor", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("ceil", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("round", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("sqrt", Type::simple_func(vec![Type::Number], Type::Number)),
-        (
-            "pow",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        (
-            "min",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        (
-            "max",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        ("random", Type::simple_func(vec![], Type::Number)),
-    ]);
-    env = env.extend("Math".to_string(), TypeScheme::mono(math_type));
-
-    // JSON object
-    let json_type = Type::object([
-        (
-            "parse",
-            Type::simple_func(vec![Type::String], Type::flex(103)),
-        ),
-        (
-            "stringify",
-            Type::simple_func(vec![Type::flex(104)], Type::String),
-        ),
-    ]);
-    env = env.extend("JSON".to_string(), TypeScheme::mono(json_type));
-
-    // parseInt, parseFloat
-    env = env.extend(
-        "parseInt".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::String], Type::Number)),
-    );
-    env = env.extend(
-        "parseFloat".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::String], Type::Number)),
-    );
-
-    // isNaN, isFinite
-    env = env.extend(
-        "isNaN".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::Number], Type::Boolean)),
-    );
-    env = env.extend(
-        "isFinite".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::Number], Type::Boolean)),
-    );
 
     // undefined and null are keywords, but we can add them as values too
     env = env.extend("undefined".to_string(), TypeScheme::mono(Type::Undefined));
@@ -279,9 +210,12 @@ mod tests {
     #[test]
     fn test_initial_env() {
         let env = initial_env();
-        assert!(env.lookup("console").is_some());
-        assert!(env.lookup("Math").is_some());
-        assert!(env.lookup("JSON").is_some());
+        // Polymorphic primitives live in the Rust env; library-shaped
+        // bindings have moved to stdlib/*.d.js.
+        assert!(env.lookup("Array").is_some());
+        assert!(env.lookup("String").is_some());
+        assert!(env.lookup("Number").is_some());
+        assert!(env.lookup("undefined").is_some());
     }
 
     #[test]
