@@ -10,6 +10,19 @@ use crate::error::{ParseError, Result};
 use crate::lexer::{Span, Spanned, Token};
 use ast::*;
 
+/// Parser-internal destructuring pattern. Not part of the public AST —
+/// every pattern is immediately lowered to ordinary declarators via
+/// [`Parser::desugar_pattern`] before any other code sees it.
+#[derive(Debug, Clone)]
+enum Pattern {
+    Ident(String, Span),
+    /// `{source: sub_pattern, ...}`. Shorthand `{a}` stores
+    /// `("a", Pattern::Ident("a"))`.
+    Object(Vec<(String, Pattern, Span)>, Span),
+    /// `[sub_pattern, sub_pattern, ...]`.
+    Array(Vec<Pattern>, Span),
+}
+
 /// The parser for mquickjs source code.
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
@@ -151,11 +164,9 @@ impl Parser {
         loop {
             // A destructuring pattern at the start of a declarator desugars
             // into a small sequence of ordinary declarators sharing a
-            // synthesised temp binding.
-            if self.check(&Token::LBrace) {
-                declarations.extend(self.parse_object_destructuring(kind)?);
-            } else if self.check(&Token::LBracket) {
-                declarations.extend(self.parse_array_destructuring(kind)?);
+            // synthesised temp binding. Patterns may nest.
+            if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                declarations.extend(self.parse_destructuring_decl(kind)?);
             } else {
                 declarations.push(self.parse_var_declarator(kind)?);
             }
@@ -176,119 +187,136 @@ impl Parser {
         })
     }
 
-    /// Desugar `const {a, b: renamed} = expr;` into
-    /// `const $destr$N = expr; const a = $destr$N.a; const renamed = $destr$N.b;`
-    /// and return the synthesised list of declarators. Nesting, defaults
-    /// and rest patterns are not supported.
-    fn parse_object_destructuring(&mut self, kind: VarKind) -> Result<Vec<VarDeclarator>> {
+    /// Parse a destructuring pattern (may be nested: `{a: {b: [c, d]}}`).
+    /// Doesn't emit declarators — caller passes the result to
+    /// [`Self::desugar_pattern`] along with a source expression.
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+        if self.check(&Token::LBrace) {
+            self.parse_object_pattern()
+        } else if self.check(&Token::LBracket) {
+            self.parse_array_pattern()
+        } else {
+            let span = self.current_span();
+            let name = self.expect_ident()?;
+            Ok(Pattern::Ident(name, span))
+        }
+    }
+
+    fn parse_object_pattern(&mut self) -> Result<Pattern> {
         let start = self.current_span().start;
         self.expect(&Token::LBrace)?;
-
-        // Pairs of (source_property, bound_name).
-        let mut props: Vec<(String, String, Span)> = Vec::new();
+        let mut entries: Vec<(String, Pattern, Span)> = Vec::new();
         while !self.check(&Token::RBrace) {
-            let prop_span = self.current_span();
+            let entry_span = self.current_span();
             let source = self.expect_ident()?;
-            let bound = if self.consume_if(&Token::Colon) {
-                self.expect_ident()?
+            let sub = if self.consume_if(&Token::Colon) {
+                self.parse_pattern()?
             } else {
-                source.clone()
+                // Shorthand `{a}` is `{a: a}`.
+                Pattern::Ident(source.clone(), entry_span)
             };
-            props.push((source, bound, prop_span));
+            entries.push((source, sub, entry_span));
             if !self.consume_if(&Token::Comma) {
                 break;
             }
         }
         self.expect(&Token::RBrace)?;
-
-        self.expect(&Token::Eq)?;
-        let init = self.parse_assignment_expression()?;
-        let init_span = init.span();
-        let end = init_span.end;
-
-        let temp = self.fresh_temp_name();
-        let pattern_span = Span::new(start, end);
-
-        let mut decls = Vec::with_capacity(props.len() + 1);
-        decls.push(VarDeclarator {
-            name: temp.clone(),
-            init: Some(init),
-            type_annotation: None,
-            kind,
-            span: pattern_span,
-        });
-        for (source, bound, prop_span) in props {
-            decls.push(VarDeclarator {
-                name: bound,
-                init: Some(Expr::Member {
-                    object: Box::new(Expr::Ident {
-                        name: temp.clone(),
-                        span: prop_span,
-                    }),
-                    property: source,
-                    span: prop_span,
-                }),
-                type_annotation: None,
-                kind,
-                span: prop_span,
-            });
-        }
-        Ok(decls)
+        let end = self.prev_span().end;
+        Ok(Pattern::Object(entries, Span::new(start, end)))
     }
 
-    /// Desugar `const [a, b] = expr;` into
-    /// `const $destr$N = expr; const a = $destr$N[0]; const b = $destr$N[1];`.
-    /// Hole elisions (`[ , , x ]`) and rest patterns are not supported.
-    fn parse_array_destructuring(&mut self, kind: VarKind) -> Result<Vec<VarDeclarator>> {
+    fn parse_array_pattern(&mut self) -> Result<Pattern> {
         let start = self.current_span().start;
         self.expect(&Token::LBracket)?;
-
-        let mut names: Vec<(String, Span)> = Vec::new();
+        let mut elems: Vec<Pattern> = Vec::new();
         while !self.check(&Token::RBracket) {
-            let name_span = self.current_span();
-            let name = self.expect_ident()?;
-            names.push((name, name_span));
+            elems.push(self.parse_pattern()?);
             if !self.consume_if(&Token::Comma) {
                 break;
             }
         }
         self.expect(&Token::RBracket)?;
+        let end = self.prev_span().end;
+        Ok(Pattern::Array(elems, Span::new(start, end)))
+    }
 
+    /// Produce a flat list of declarators that destructure `source` into
+    /// the bindings named by `pattern`. Object / array patterns recurse
+    /// through a fresh temp binding so arbitrarily nested patterns work.
+    fn desugar_pattern(
+        &mut self,
+        pattern: &Pattern,
+        source: Expr,
+        kind: VarKind,
+        decls: &mut Vec<VarDeclarator>,
+    ) {
+        match pattern {
+            Pattern::Ident(name, span) => {
+                decls.push(VarDeclarator {
+                    name: name.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+            }
+            Pattern::Object(entries, span) => {
+                let temp = self.fresh_temp_name();
+                decls.push(VarDeclarator {
+                    name: temp.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+                for (prop_name, sub, prop_span) in entries {
+                    let access = Expr::Member {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *prop_span,
+                        }),
+                        property: prop_name.clone(),
+                        span: *prop_span,
+                    };
+                    self.desugar_pattern(sub, access, kind, decls);
+                }
+            }
+            Pattern::Array(elems, span) => {
+                let temp = self.fresh_temp_name();
+                decls.push(VarDeclarator {
+                    name: temp.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+                for (idx, sub) in elems.iter().enumerate() {
+                    let elem_span = *span;
+                    let access = Expr::ComputedMember {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: elem_span,
+                        }),
+                        property: Box::new(Expr::Lit {
+                            value: Literal::Number(idx as f64),
+                            span: elem_span,
+                        }),
+                        span: elem_span,
+                    };
+                    self.desugar_pattern(sub, access, kind, decls);
+                }
+            }
+        }
+    }
+
+    /// Parse `{pattern} = expr` or `[pattern] = expr` at declaration
+    /// position and return the desugared flat list of declarators.
+    fn parse_destructuring_decl(&mut self, kind: VarKind) -> Result<Vec<VarDeclarator>> {
+        let pattern = self.parse_pattern()?;
         self.expect(&Token::Eq)?;
         let init = self.parse_assignment_expression()?;
-        let init_span = init.span();
-        let end = init_span.end;
-
-        let temp = self.fresh_temp_name();
-        let pattern_span = Span::new(start, end);
-
-        let mut decls = Vec::with_capacity(names.len() + 1);
-        decls.push(VarDeclarator {
-            name: temp.clone(),
-            init: Some(init),
-            type_annotation: None,
-            kind,
-            span: pattern_span,
-        });
-        for (idx, (name, name_span)) in names.into_iter().enumerate() {
-            decls.push(VarDeclarator {
-                name,
-                init: Some(Expr::ComputedMember {
-                    object: Box::new(Expr::Ident {
-                        name: temp.clone(),
-                        span: name_span,
-                    }),
-                    property: Box::new(Expr::Lit {
-                        value: Literal::Number(idx as f64),
-                        span: name_span,
-                    }),
-                    span: name_span,
-                }),
-                type_annotation: None,
-                kind,
-                span: name_span,
-            });
-        }
+        let mut decls = Vec::new();
+        self.desugar_pattern(&pattern, init, kind, &mut decls);
         Ok(decls)
     }
 
@@ -851,6 +879,94 @@ impl Parser {
         let init_or_lhs = if self.check(&Token::Var) || self.check(&Token::Let) {
             let var_start = self.current_span().start;
             self.advance();
+
+            // `for (let {a, b} of arr) { ... }` — a destructuring pattern
+            // on the LHS. We desugar to a for-of over a synthesised temp,
+            // prepending a destructuring declaration at the top of the
+            // loop body so the pattern's bindings are in scope.
+            if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                let pattern = self.parse_pattern()?;
+                if self.check(&Token::In) || self.check(&Token::Of) {
+                    let is_of = self.check(&Token::Of);
+                    self.advance();
+                    let right = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    let body = self.parse_statement()?;
+
+                    let temp = self.fresh_temp_name();
+                    let pattern_span = Span::new(var_start, self.prev_span().end);
+                    // Build the destructuring declarations, initialised from
+                    // the synthesised temp name.
+                    let mut destr_decls = Vec::new();
+                    self.desugar_pattern(
+                        &pattern,
+                        Expr::Ident {
+                            name: temp.clone(),
+                            span: pattern_span,
+                        },
+                        VarKind::Var,
+                        &mut destr_decls,
+                    );
+                    let destr_stmt = Stmt::Var {
+                        kind: VarKind::Var,
+                        declarations: destr_decls,
+                        span: pattern_span,
+                    };
+
+                    // Prepend the destructuring to the body.
+                    let new_body = match body {
+                        Stmt::Block {
+                            body: mut body_stmts,
+                            span: body_span,
+                        } => {
+                            let mut new_stmts = Vec::with_capacity(body_stmts.len() + 1);
+                            new_stmts.push(destr_stmt);
+                            new_stmts.append(&mut body_stmts);
+                            Stmt::Block {
+                                body: new_stmts,
+                                span: body_span,
+                            }
+                        }
+                        other => {
+                            let body_span = other.span();
+                            Stmt::Block {
+                                body: vec![destr_stmt, other],
+                                span: body_span,
+                            }
+                        }
+                    };
+
+                    let for_span = Span::new(start, self.prev_span().end);
+                    return if is_of {
+                        Ok(Stmt::ForOf {
+                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            right,
+                            body: Box::new(new_body),
+                            span: for_span,
+                        })
+                    } else {
+                        Ok(Stmt::ForIn {
+                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            right,
+                            body: Box::new(new_body),
+                            span: for_span,
+                        })
+                    };
+                } else {
+                    // Destructuring in a C-style `for (init; test; update)`
+                    // head would bind names only used for one iteration,
+                    // which rarely makes sense. Reject and point the user
+                    // at the for-of form.
+                    let span = self.current_span();
+                    return Err(ParseError::UnexpectedToken {
+                        found: format!("{}", self.current()),
+                        expected: "'of' or 'in' (destructuring pattern is only supported in for-of/for-in)".to_string(),
+                        span,
+                    }
+                    .into());
+                }
+            }
+
             let name = self.expect_ident()?;
             let var_end = self.prev_span().end;
             let type_annotation = self.try_get_type_annotation(self.current_span(), &name);
