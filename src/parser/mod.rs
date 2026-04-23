@@ -35,6 +35,14 @@ pub struct Parser {
     /// Counter for synthesised temp names (used when desugaring
     /// destructuring patterns into a sequence of simple declarators).
     temp_counter: usize,
+    /// How many enclosing `async` functions we're currently inside of.
+    /// `await` is legal only when this is > 0.
+    async_depth: usize,
+    /// Set by the `async function` parser arm before it hands off to the
+    /// generic function-declaration / function-expression parser; read
+    /// (and immediately cleared) by that parser to decide whether the
+    /// body it's about to read should start in an async context.
+    next_fn_is_async: bool,
 }
 
 impl Parser {
@@ -46,6 +54,8 @@ impl Parser {
             annotation_pos: 0,
             no_in: false,
             temp_counter: 0,
+            async_depth: 0,
+            next_fn_is_async: false,
         }
     }
 
@@ -103,8 +113,13 @@ impl Parser {
             // function's return type ends up as `Promise<T>`.
             Token::Async if matches!(self.tokens.get(self.pos + 1).map(|s| &s.value), Some(Token::Function)) => {
                 self.advance(); // consume `async`
-                let decl = self.parse_function_declaration()?;
-                Ok(Self::make_async_function_decl(decl))
+                // Signal to the upcoming function parse that its body
+                // should start in an async context. The flag is a
+                // one-shot: the function parser reads and clears it
+                // before descending into the body.
+                self.next_fn_is_async = true;
+                let decl_result = self.parse_function_declaration();
+                Ok(Self::make_async_function_decl(decl_result?))
             }
             Token::Import => self.parse_import_declaration(),
             Token::Export => self.parse_export_declaration(),
@@ -501,7 +516,7 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let params = self.parse_parameters()?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
                 let func_span = Span::new(start, self.prev_span().end);
 
                 Ok(Stmt::Export {
@@ -609,7 +624,7 @@ impl Parser {
                 let (params, prefix) = self.parse_parameters_with_prefix()?;
                 self.expect(&Token::RParen)?;
                 let body = Self::prepend_param_destructuring(
-                    self.parse_block_statement()?,
+                    self.parse_function_body_block()?,
                     prefix,
                 );
                 let member_span = Span::new(member_start, self.prev_span().end);
@@ -650,7 +665,7 @@ impl Parser {
             self.expect(&Token::LParen)?;
             let params = self.parse_parameters()?;
             self.expect(&Token::RParen)?;
-            let body_stmt = self.parse_block_statement()?;
+            let body_stmt = self.parse_function_body_block()?;
             let member_span = Span::new(member_start, self.prev_span().end);
 
             if key_name == "constructor" {
@@ -839,7 +854,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
 
         let body = Box::new(Self::prepend_param_destructuring(
-            self.parse_block_statement()?,
+            self.parse_function_body_block()?,
             prefix,
         ));
 
@@ -899,6 +914,20 @@ impl Parser {
         }
 
         Ok((names, prefix))
+    }
+
+    /// Parse a function body block, establishing a fresh async context.
+    /// The body starts in an async context iff `next_fn_is_async` was set
+    /// by the caller (e.g. the `async function` arm) — every other path
+    /// starts at async_depth = 0, so `await` inside a plain function
+    /// nested in an async one correctly errors.
+    fn parse_function_body_block(&mut self) -> Result<Stmt> {
+        let saved = self.async_depth;
+        let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
+        self.async_depth = if is_async { 1 } else { 0 };
+        let result = self.parse_block_statement();
+        self.async_depth = saved;
+        result
     }
 
     /// Thin wrapper for sites that know they don't have patterns (e.g.
@@ -1590,6 +1619,19 @@ impl Parser {
         };
 
         if let Some(op) = op {
+            // `await` is a parse error outside of an async function body.
+            // Keyword tokens are what trigger this branch, so a stray
+            // `await` in a regular function already fails — we just give
+            // a nicer message.
+            if matches!(op, UnaryOp::Await) && self.async_depth == 0 {
+                let span = self.current_span();
+                return Err(ParseError::UnexpectedToken {
+                    found: "await".to_string(),
+                    expected: "expression (await is only valid inside an async function)".to_string(),
+                    span,
+                }
+                .into());
+            }
             self.advance();
             let argument = self.parse_unary_expression()?;
 
@@ -1950,7 +1992,7 @@ impl Parser {
                 let key = self.parse_property_key()?;
                 self.expect(&Token::LParen)?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
 
                 return Ok(PropDef::Getter {
                     key,
@@ -1965,7 +2007,7 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let param = self.expect_ident()?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
 
                 return Ok(PropDef::Setter {
                     key,
@@ -1984,7 +2026,7 @@ impl Parser {
             let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
             let body = Box::new(Self::prepend_param_destructuring(
-                self.parse_block_statement()?,
+                self.parse_function_body_block()?,
                 prefix,
             ));
 
@@ -2211,6 +2253,14 @@ impl Parser {
 
         self.expect(&Token::FatArrow)?;
 
+        // Arrow functions establish their own function body scope, same
+        // as any other callable form. Non-async arrows reset async_depth
+        // to 0 for the duration of their body, which correctly rejects
+        // `await` inside an arrow nested in a regular function.
+        let saved_async = self.async_depth;
+        let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
+        self.async_depth = if is_async { 1 } else { 0 };
+
         // Body: block `{ ... }` or a single expression.
         let body = if self.check(&Token::LBrace) {
             Box::new(Self::prepend_param_destructuring(
@@ -2232,6 +2282,8 @@ impl Parser {
                 span: return_span,
             })
         };
+
+        self.async_depth = saved_async;
 
         Ok(Expr::Function {
             name: None,
@@ -2267,7 +2319,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
 
         let body = Box::new(Self::prepend_param_destructuring(
-            self.parse_block_statement()?,
+            self.parse_function_body_block()?,
             prefix,
         ));
 
