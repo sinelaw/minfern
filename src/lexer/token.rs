@@ -40,6 +40,7 @@ impl<T> Spanned<T> {
 pub enum Token {
     // Keywords
     Var,
+    Let,
     Const,
     Function,
     If,
@@ -170,6 +171,7 @@ impl Token {
         matches!(
             self,
             Token::Var
+                | Token::Let
                 | Token::Const
                 | Token::Function
                 | Token::If
@@ -209,6 +211,7 @@ impl Token {
     pub fn keyword(s: &str) -> Option<Token> {
         match s {
             "var" => Some(Token::Var),
+            "let" => Some(Token::Let),
             "const" => Some(Token::Const),
             "function" => Some(Token::Function),
             "if" => Some(Token::If),
@@ -250,6 +253,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Var => write!(f, "var"),
+            Token::Let => write!(f, "let"),
             Token::Const => write!(f, "const"),
             Token::Function => write!(f, "function"),
             Token::If => write!(f, "if"),

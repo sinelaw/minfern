@@ -67,6 +67,10 @@ impl Parser {
     fn parse_statement(&mut self) -> Result<Stmt> {
         match self.current() {
             Token::Var => self.parse_var_declaration(VarKind::Var),
+            // `let` is parsed as `var`. minfern doesn't yet model per-block
+            // lexical scoping or temporal-dead-zone rules, but var-with-block
+            // scoping is a sound over-approximation for type checking.
+            Token::Let => self.parse_var_declaration(VarKind::Var),
             Token::Const => self.parse_var_declaration(VarKind::Const),
             Token::Function => self.parse_function_declaration(),
             Token::Import => self.parse_import_declaration(),
@@ -270,8 +274,9 @@ impl Parser {
 
         // Check what we're exporting
         match self.current() {
-            Token::Var => {
-                // export var x = 1;
+            // `let` is treated as `var` for parsing purposes.
+            Token::Var | Token::Let => {
+                // export var x = 1;  (also: export let x = 1;)
                 self.advance();
                 let mut declarations = Vec::new();
                 loop {
@@ -477,8 +482,8 @@ impl Parser {
         self.expect(&Token::For)?;
         self.expect(&Token::LParen)?;
 
-        // Parse init
-        let init_or_lhs = if self.check(&Token::Var) {
+        // Parse init. `let i` in a for-init is treated identically to `var i`.
+        let init_or_lhs = if self.check(&Token::Var) || self.check(&Token::Let) {
             let var_start = self.current_span().start;
             self.advance();
             let name = self.expect_ident()?;
@@ -1400,6 +1405,7 @@ impl Parser {
         matches!(
             token,
             Token::Var
+                | Token::Let
                 | Token::Const
                 | Token::Function
                 | Token::If
@@ -1439,6 +1445,7 @@ impl Parser {
     fn keyword_to_string(&self, token: &Token) -> String {
         match token {
             Token::Var => "var",
+            Token::Let => "let",
             Token::Const => "const",
             Token::Function => "function",
             Token::If => "if",
