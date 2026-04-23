@@ -771,10 +771,13 @@ impl Parser {
         let type_annotation = self.try_get_type_annotation_for_function(func_span, &name);
 
         self.expect(&Token::LParen)?;
-        let params = self.parse_parameters()?;
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
         self.expect(&Token::RParen)?;
 
-        let body = Box::new(self.parse_block_statement()?);
+        let body = Box::new(Self::prepend_param_destructuring(
+            self.parse_block_statement()?,
+            prefix,
+        ));
 
         Ok(Stmt::FunctionDecl {
             name,
@@ -785,12 +788,45 @@ impl Parser {
         })
     }
 
-    fn parse_parameters(&mut self) -> Result<Vec<String>> {
-        let mut params = Vec::new();
+    /// Parse a comma-separated parameter list. A parameter may be a plain
+    /// identifier or a destructuring pattern; pattern parameters synthesise
+    /// a fresh temp name in the returned name list and emit the
+    /// corresponding destructuring into `prefix_stmts`, which callers
+    /// prepend to the function body.
+    fn parse_parameters_with_prefix(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<Stmt>)> {
+        let mut names = Vec::new();
+        let mut prefix = Vec::new();
 
         if !self.check(&Token::RParen) {
             loop {
-                params.push(self.expect_ident()?);
+                if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                    let pattern = self.parse_pattern()?;
+                    let temp = self.fresh_temp_name();
+                    let pattern_span = Span::new(
+                        self.prev_span().start,
+                        self.prev_span().end,
+                    );
+                    let mut decls = Vec::new();
+                    self.desugar_pattern(
+                        &pattern,
+                        Expr::Ident {
+                            name: temp.clone(),
+                            span: pattern_span,
+                        },
+                        VarKind::Var,
+                        &mut decls,
+                    );
+                    prefix.push(Stmt::Var {
+                        kind: VarKind::Var,
+                        declarations: decls,
+                        span: pattern_span,
+                    });
+                    names.push(temp);
+                } else {
+                    names.push(self.expect_ident()?);
+                }
 
                 if !self.consume_if(&Token::Comma) {
                     break;
@@ -798,7 +834,53 @@ impl Parser {
             }
         }
 
-        Ok(params)
+        Ok((names, prefix))
+    }
+
+    /// Thin wrapper for sites that know they don't have patterns (e.g.
+    /// the deliberately-restricted class constructor parameters).
+    fn parse_parameters(&mut self) -> Result<Vec<String>> {
+        let (names, prefix) = self.parse_parameters_with_prefix()?;
+        if !prefix.is_empty() {
+            let span = prefix[0].span();
+            return Err(ParseError::UnexpectedToken {
+                found: "destructuring pattern".to_string(),
+                expected: "plain parameter name".to_string(),
+                span,
+            }
+            .into());
+        }
+        Ok(names)
+    }
+
+    /// Given a function body and any destructuring statements synthesised
+    /// from pattern parameters, prepend them inside the body's block.
+    fn prepend_param_destructuring(body: Stmt, prefix: Vec<Stmt>) -> Stmt {
+        if prefix.is_empty() {
+            return body;
+        }
+        match body {
+            Stmt::Block {
+                body: mut stmts,
+                span,
+            } => {
+                let mut new_stmts = prefix;
+                new_stmts.append(&mut stmts);
+                Stmt::Block {
+                    body: new_stmts,
+                    span,
+                }
+            }
+            other => {
+                let span = other.span();
+                let mut new_stmts = prefix;
+                new_stmts.push(other);
+                Stmt::Block {
+                    body: new_stmts,
+                    span,
+                }
+            }
+        }
     }
 
     fn parse_if_statement(&mut self) -> Result<Stmt> {
@@ -1835,9 +1917,12 @@ impl Parser {
         // Check for method shorthand
         if self.check(&Token::LParen) {
             self.advance();
-            let params = self.parse_parameters()?;
+            let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
-            let body = Box::new(self.parse_block_statement()?);
+            let body = Box::new(Self::prepend_param_destructuring(
+                self.parse_block_statement()?,
+                prefix,
+            ));
 
             return Ok(PropDef::Method {
                 key,
@@ -2000,27 +2085,34 @@ impl Parser {
                 .unwrap_or(false);
         }
 
-        // Parenthesised params: `(` ... `)` `=>`
+        // Parenthesised params: `(` ... `)` `=>`. We only need to know
+        // whether the matching `)` is immediately followed by `=>`, so we
+        // track nesting for every kind of bracket and ignore everything
+        // else. Pattern parameters (`({x})`, `([a, b])`) go through here
+        // just fine — the inner braces/brackets are balanced like any
+        // other group.
         if matches!(self.current(), Token::LParen) {
             let mut i = self.pos + 1;
-            let mut depth: i32 = 1;
+            let mut paren_depth: i32 = 1;
+            let mut brace_depth: i32 = 0;
+            let mut bracket_depth: i32 = 0;
             while let Some(tok) = self.tokens.get(i) {
                 match &tok.value {
-                    Token::LParen => depth += 1,
+                    Token::LParen => paren_depth += 1,
                     Token::RParen => {
-                        depth -= 1;
-                        if depth == 0 {
+                        paren_depth -= 1;
+                        if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
                             return self.tokens
                                 .get(i + 1)
                                 .map(|s| matches!(s.value, Token::FatArrow))
                                 .unwrap_or(false);
                         }
                     }
-                    // Inside the paren list we only expect idents, commas
-                    // and type annotations. If we see anything that rules
-                    // out a plain arrow param list (e.g. `{`, `[`), bail
-                    // early rather than scanning the entire program.
-                    Token::LBrace | Token::LBracket | Token::Eof => return false,
+                    Token::LBrace => brace_depth += 1,
+                    Token::RBrace => brace_depth -= 1,
+                    Token::LBracket => bracket_depth += 1,
+                    Token::RBracket => bracket_depth -= 1,
+                    Token::Eof => return false,
                     _ => {}
                 }
                 i += 1;
@@ -2041,32 +2133,38 @@ impl Parser {
         let start = self.current_span().start;
 
         // Parse parameters.
-        let params: Vec<String> = if matches!(self.current(), Token::Ident(_)) {
-            // Single-identifier form: `x => ...`
-            let name = self.expect_ident()?;
-            vec![name]
-        } else {
-            self.expect(&Token::LParen)?;
-            let params = self.parse_parameters()?;
-            self.expect(&Token::RParen)?;
-            params
-        };
+        let (params, prefix): (Vec<String>, Vec<Stmt>) =
+            if matches!(self.current(), Token::Ident(_)) {
+                // Single-identifier form: `x => ...`
+                let name = self.expect_ident()?;
+                (vec![name], vec![])
+            } else {
+                self.expect(&Token::LParen)?;
+                let result = self.parse_parameters_with_prefix()?;
+                self.expect(&Token::RParen)?;
+                result
+            };
 
         self.expect(&Token::FatArrow)?;
 
         // Body: block `{ ... }` or a single expression.
         let body = if self.check(&Token::LBrace) {
-            Box::new(self.parse_block_statement()?)
+            Box::new(Self::prepend_param_destructuring(
+                self.parse_block_statement()?,
+                prefix,
+            ))
         } else {
             let expr_start = self.current_span().start;
             let expr = self.parse_assignment_expression()?;
             let expr_end = self.prev_span().end;
             let return_span = Span::new(expr_start, expr_end);
+            let mut stmts = prefix;
+            stmts.push(Stmt::Return {
+                argument: Some(expr),
+                span: return_span,
+            });
             Box::new(Stmt::Block {
-                body: vec![Stmt::Return {
-                    argument: Some(expr),
-                    span: return_span,
-                }],
+                body: stmts,
                 span: return_span,
             })
         };
@@ -2101,10 +2199,13 @@ impl Parser {
         };
 
         self.expect(&Token::LParen)?;
-        let params = self.parse_parameters()?;
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
         self.expect(&Token::RParen)?;
 
-        let body = Box::new(self.parse_block_statement()?);
+        let body = Box::new(Self::prepend_param_destructuring(
+            self.parse_block_statement()?,
+            prefix,
+        ));
 
         Ok(Expr::Function {
             name,
