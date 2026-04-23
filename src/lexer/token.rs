@@ -43,6 +43,9 @@ pub enum Token {
     Let,
     Const,
     Function,
+    Class,
+    Extends,
+    Super,
     If,
     Else,
     While,
@@ -175,6 +178,9 @@ impl Token {
                 | Token::Let
                 | Token::Const
                 | Token::Function
+                | Token::Class
+                | Token::Extends
+                | Token::Super
                 | Token::If
                 | Token::Else
                 | Token::While
@@ -214,6 +220,9 @@ impl Token {
             "var" => Some(Token::Var),
             "let" => Some(Token::Let),
             "const" => Some(Token::Const),
+            "class" => Some(Token::Class),
+            "extends" => Some(Token::Extends),
+            "super" => Some(Token::Super),
             "function" => Some(Token::Function),
             "if" => Some(Token::If),
             "else" => Some(Token::Else),
@@ -256,6 +265,9 @@ impl fmt::Display for Token {
             Token::Var => write!(f, "var"),
             Token::Let => write!(f, "let"),
             Token::Const => write!(f, "const"),
+            Token::Class => write!(f, "class"),
+            Token::Extends => write!(f, "extends"),
+            Token::Super => write!(f, "super"),
             Token::Function => write!(f, "function"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),

@@ -83,6 +83,7 @@ impl Parser {
             Token::Let => self.parse_var_declaration(VarKind::Var),
             Token::Const => self.parse_var_declaration(VarKind::Const),
             Token::Function => self.parse_function_declaration(),
+            Token::Class => self.parse_class_declaration(),
             Token::Import => self.parse_import_declaration(),
             Token::Export => self.parse_export_declaration(),
             Token::If => self.parse_if_statement(),
@@ -498,6 +499,158 @@ impl Parser {
             }
             .into())
         }
+    }
+
+    /// Parse a class declaration and desugar it into a factory function.
+    ///
+    /// `class Counter { constructor(n) { this.value = n; } inc() { ... } }`
+    /// becomes
+    /// `function Counter(n) { return { value: n, inc: function() {...} }; }`.
+    ///
+    /// Extends/super, static methods and private fields are not supported.
+    /// The constructor body must consist of `this.X = EXPR;` statements
+    /// only — those become the initial field values of the returned object
+    /// literal. Any other kind of constructor statement errors out; users
+    /// who need more should write the factory function directly.
+    fn parse_class_declaration(&mut self) -> Result<Stmt> {
+        let start = self.current_span().start;
+        self.expect(&Token::Class)?;
+        let name = self.expect_ident()?;
+
+        // Reject `extends Parent` for now; it'd need a real prototype chain
+        // to match runtime semantics and minfern has no inheritance.
+        if self.check(&Token::Extends) {
+            let span = self.current_span();
+            return Err(ParseError::UnexpectedToken {
+                found: "extends".to_string(),
+                expected: "{ (class inheritance is not supported)".to_string(),
+                span,
+            }
+            .into());
+        }
+
+        self.expect(&Token::LBrace)?;
+
+        let mut ctor_params: Vec<String> = Vec::new();
+        let mut field_props: Vec<PropDef> = Vec::new();
+        let mut method_props: Vec<PropDef> = Vec::new();
+
+        while !self.check(&Token::RBrace) && !self.is_at_end() {
+            // Skip empty separators (class bodies don't require semicolons
+            // between members but tolerate them).
+            if self.consume_if(&Token::Semicolon) {
+                continue;
+            }
+
+            let member_start = self.current_span().start;
+            let key_name = self.expect_ident()?;
+            let key_span = self.prev_span();
+
+            self.expect(&Token::LParen)?;
+            let params = self.parse_parameters()?;
+            self.expect(&Token::RParen)?;
+            let body_stmt = self.parse_block_statement()?;
+            let member_span = Span::new(member_start, self.prev_span().end);
+
+            if key_name == "constructor" {
+                ctor_params = params;
+                // Extract field initialisations from the constructor body.
+                let stmts = match &body_stmt {
+                    Stmt::Block { body, .. } => body.clone(),
+                    _ => vec![body_stmt.clone()],
+                };
+                for s in stmts {
+                    match s {
+                        Stmt::Expr { expression, .. } => {
+                            if let Some((field, value, span)) =
+                                Parser::extract_this_assignment(&expression)
+                            {
+                                field_props.push(PropDef::Property {
+                                    key: PropKey::Ident(field),
+                                    value,
+                                    span,
+                                });
+                            } else {
+                                return Err(ParseError::UnexpectedToken {
+                                    found: "complex expression".to_string(),
+                                    expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
+                                    span: expression.span(),
+                                }
+                                .into());
+                            }
+                        }
+                        other => {
+                            return Err(ParseError::UnexpectedToken {
+                                found: "statement".to_string(),
+                                expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
+                                span: other.span(),
+                            }
+                            .into());
+                        }
+                    }
+                }
+            } else {
+                method_props.push(PropDef::Method {
+                    key: PropKey::Ident(key_name),
+                    params,
+                    body: Box::new(body_stmt),
+                    span: member_span,
+                });
+            }
+
+            let _ = key_span; // kept only to document where the member name lived
+        }
+
+        self.expect(&Token::RBrace)?;
+        let end = self.prev_span().end;
+        let span = Span::new(start, end);
+
+        // Build the object literal: field properties first, then methods.
+        let mut all_props = field_props;
+        all_props.extend(method_props);
+        let obj_literal = Expr::Object {
+            properties: all_props,
+            span,
+        };
+
+        // Wrap the object literal in `function Name(ctor_params) { return <obj>; }`.
+        let body_block = Stmt::Block {
+            body: vec![Stmt::Return {
+                argument: Some(obj_literal),
+                span,
+            }],
+            span,
+        };
+
+        Ok(Stmt::FunctionDecl {
+            name,
+            params: ctor_params,
+            body: Box::new(body_block),
+            type_annotation: None,
+            span,
+        })
+    }
+
+    /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.
+    /// Any other expression returns None.
+    fn extract_this_assignment(expr: &Expr) -> Option<(String, Expr, Span)> {
+        if let Expr::Assign {
+            op: AssignOp::Assign,
+            left,
+            right,
+            span,
+        } = expr
+        {
+            if let Expr::Member {
+                object, property, ..
+            } = left.as_ref()
+            {
+                if matches!(object.as_ref(), Expr::This { .. }) {
+                    return Some((property.clone(), (**right).clone(), *span));
+                }
+            }
+        }
+        None
     }
 
     fn parse_function_declaration(&mut self) -> Result<Stmt> {
