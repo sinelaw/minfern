@@ -153,6 +153,7 @@ pub enum UnaryOp {
     Typeof, // typeof
     Void,   // void
     Delete, // delete
+    Await,  // await
 
     // Pre/Post increment/decrement
     PreInc,  // ++x
@@ -190,10 +191,15 @@ pub enum PropKey {
 /// Object property definition
 #[derive(Debug, Clone)]
 pub enum PropDef {
-    /// Regular property: key: value
+    /// Regular property: key: value, or `key /*: T */: value` with a
+    /// per-field type annotation that constrains the value.
     Property {
         key: PropKey,
         value: Expr,
+        /// Inline annotation sitting between `key` and the colon.
+        /// When present, inference unifies the value's type with the
+        /// annotated type and records the property at that type.
+        type_annotation: Option<TypeAnnotation>,
         span: Source,
     },
     /// Getter: get key() { ... }

@@ -40,8 +40,14 @@ impl<T> Spanned<T> {
 pub enum Token {
     // Keywords
     Var,
+    Let,
     Const,
     Function,
+    Class,
+    Extends,
+    Super,
+    Async,
+    Await,
     If,
     Else,
     While,
@@ -159,6 +165,7 @@ pub enum Token {
     Semicolon, // ;
     Colon,     // :
     Question,  // ?
+    FatArrow,  // =>
 
     // Special
     Eof,
@@ -170,8 +177,14 @@ impl Token {
         matches!(
             self,
             Token::Var
+                | Token::Let
                 | Token::Const
                 | Token::Function
+                | Token::Class
+                | Token::Extends
+                | Token::Super
+                | Token::Async
+                | Token::Await
                 | Token::If
                 | Token::Else
                 | Token::While
@@ -209,7 +222,13 @@ impl Token {
     pub fn keyword(s: &str) -> Option<Token> {
         match s {
             "var" => Some(Token::Var),
+            "let" => Some(Token::Let),
             "const" => Some(Token::Const),
+            "class" => Some(Token::Class),
+            "extends" => Some(Token::Extends),
+            "super" => Some(Token::Super),
+            "async" => Some(Token::Async),
+            "await" => Some(Token::Await),
             "function" => Some(Token::Function),
             "if" => Some(Token::If),
             "else" => Some(Token::Else),
@@ -250,7 +269,13 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Var => write!(f, "var"),
+            Token::Let => write!(f, "let"),
             Token::Const => write!(f, "const"),
+            Token::Class => write!(f, "class"),
+            Token::Extends => write!(f, "extends"),
+            Token::Super => write!(f, "super"),
+            Token::Async => write!(f, "async"),
+            Token::Await => write!(f, "await"),
             Token::Function => write!(f, "function"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
@@ -341,6 +366,7 @@ impl fmt::Display for Token {
             Token::Semicolon => write!(f, ";"),
             Token::Colon => write!(f, ":"),
             Token::Question => write!(f, "?"),
+            Token::FatArrow => write!(f, "=>"),
             Token::Eof => write!(f, "<eof>"),
         }
     }

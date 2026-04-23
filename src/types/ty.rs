@@ -215,6 +215,11 @@ pub enum Type {
     /// Map type for string-keyed dictionaries: Map<T>
     Map(Box<Type>),
 
+    /// Promise type: `Promise<T>`. Modelled as a parameterised nominal
+    /// type analogous to `Array<T>`. The `await` expression extracts the
+    /// inner `T`; an `async function` returning `T` has type `Promise<T>`.
+    Promise(Box<Type>),
+
     /// Named recursive type reference: μα.T
     /// The TypeId refers to a type definition, and the Vec<Type> are type arguments.
     Named(TypeId, Vec<Type>),
@@ -266,6 +271,11 @@ impl Type {
     /// Create an array type.
     pub fn array(elem: Type) -> Self {
         Type::Array(Box::new(elem))
+    }
+
+    /// Create a promise type.
+    pub fn promise(inner: Type) -> Self {
+        Type::Promise(Box::new(inner))
     }
 
     /// Create a map type.
@@ -413,6 +423,7 @@ impl Type {
             }
 
             Type::Array(elem) => elem.collect_free_vars(vars),
+            Type::Promise(inner) => inner.collect_free_vars(vars),
             Type::Map(value) => value.collect_free_vars(vars),
 
             Type::Named(_, args) => {

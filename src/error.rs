@@ -285,6 +285,9 @@ pub enum TypeError {
     #[error("Cannot assign to constant '{name}'")]
     AssignmentToConstant { name: String, span: Span },
 
+    #[error("{message}")]
+    Module { message: String, span: Span },
+
     #[error("Cannot assign to polymorphic property '{property}' of immutable binding '{object}'")]
     AssignmentToPolymorphicProperty {
         object: String,
@@ -309,6 +312,7 @@ impl TypeError {
             TypeError::AmbiguousType { span } => *span,
             TypeError::AssignmentToConstant { span, .. } => *span,
             TypeError::AssignmentToPolymorphicProperty { span, .. } => *span,
+            TypeError::Module { span, .. } => *span,
         }
     }
 }

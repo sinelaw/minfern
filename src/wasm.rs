@@ -7,6 +7,7 @@ use crate::error::MinfernError;
 use crate::infer::{decorate_with_types, InferState};
 use crate::lexer::{Scanner, Token};
 use crate::parser::{pretty::print_program, Parser};
+use crate::stdlib::initial_env_with_stdlib;
 use crate::types::PrettyContext;
 
 /// Result of type checking, returned as JSON.
@@ -123,9 +124,13 @@ pub fn check_types(source: &str) -> CheckResult {
         }
     };
 
-    // Type inference
-    let mut state = InferState::new();
-    let env = initial_env();
+    // Type inference. Prefer the full stdlib env (core + dom); fall back to
+    // the bare Rust env if loading the embedded libs fails (shouldn't happen
+    // for the shipped files, but we don't want to crash the playground).
+    let (env, mut state) = match initial_env_with_stdlib() {
+        Ok(r) => r,
+        Err(_) => (initial_env(), InferState::new()),
+    };
 
     match state.infer_program_with_env(&env, &program) {
         Ok((result_type, final_env)) => {

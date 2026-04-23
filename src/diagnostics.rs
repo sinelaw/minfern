@@ -227,6 +227,7 @@ pub fn print_error(filename: &str, source: &str, error: &MinfernError) {
                         .to_string(),
                 ),
             ),
+            TypeError::Module { message, span } => (message.clone(), *span, None),
         },
     };
 

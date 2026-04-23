@@ -291,6 +291,21 @@ impl<'a> TypeParser<'a> {
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
             "Null" | "null" => Ok(Type::Null),
             "Regex" => Ok(Type::Regex),
+            "Promise" => {
+                // `Promise<T>` — the inner type is required.
+                self.skip_whitespace();
+                if self.peek_char() != Some('<') {
+                    return Err(self.error(
+                        "expected '<T>' after 'Promise'".to_string(),
+                    ));
+                }
+                self.expect_char('<')?;
+                self.skip_whitespace();
+                let inner = self.parse_type()?;
+                self.skip_whitespace();
+                self.expect_char('>')?;
+                Ok(Type::promise(inner))
+            }
             _ => {
                 // Check if it's a known type variable
                 if let Some(&var_id) = self.type_vars.get(ident) {
@@ -589,6 +604,8 @@ mod tests {
 
             (Type::Array(e1), Type::Array(e2)) => types_structurally_equal(e1, e2, var_map),
 
+            (Type::Promise(i1), Type::Promise(i2)) => types_structurally_equal(i1, i2, var_map),
+
             (Type::Map(v1), Type::Map(v2)) => types_structurally_equal(v1, v2, var_map),
 
             (
@@ -759,6 +776,8 @@ mod proptests {
             }
 
             (Type::Array(e1), Type::Array(e2)) => types_structurally_equal(e1, e2, var_map),
+
+            (Type::Promise(i1), Type::Promise(i2)) => types_structurally_equal(i1, i2, var_map),
 
             (Type::Map(v1), Type::Map(v2)) => types_structurally_equal(v1, v2, var_map),
 

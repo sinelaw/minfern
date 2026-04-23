@@ -133,6 +133,12 @@ impl PrettyContext {
                 write!(w, "[]")
             }
 
+            Type::Promise(inner) => {
+                write!(w, "Promise<")?;
+                self.write_type(w, inner, false)?;
+                write!(w, ">")
+            }
+
             Type::Map(value) => {
                 write!(w, "Map<")?;
                 self.write_type(w, value, false)?;

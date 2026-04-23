@@ -10,6 +10,19 @@ use crate::error::{ParseError, Result};
 use crate::lexer::{Span, Spanned, Token};
 use ast::*;
 
+/// Parser-internal destructuring pattern. Not part of the public AST —
+/// every pattern is immediately lowered to ordinary declarators via
+/// [`Parser::desugar_pattern`] before any other code sees it.
+#[derive(Debug, Clone)]
+enum Pattern {
+    Ident(String, Span),
+    /// `{source: sub_pattern, ...}`. Shorthand `{a}` stores
+    /// `("a", Pattern::Ident("a"))`.
+    Object(Vec<(String, Pattern, Span)>, Span),
+    /// `[sub_pattern, sub_pattern, ...]`.
+    Array(Vec<Pattern>, Span),
+}
+
 /// The parser for mquickjs source code.
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
@@ -19,6 +32,17 @@ pub struct Parser {
     annotation_pos: usize,
     /// Whether to disallow 'in' as a binary operator (for for-loop init)
     no_in: bool,
+    /// Counter for synthesised temp names (used when desugaring
+    /// destructuring patterns into a sequence of simple declarators).
+    temp_counter: usize,
+    /// How many enclosing `async` functions we're currently inside of.
+    /// `await` is legal only when this is > 0.
+    async_depth: usize,
+    /// Set by the `async function` parser arm before it hands off to the
+    /// generic function-declaration / function-expression parser; read
+    /// (and immediately cleared) by that parser to decide whether the
+    /// body it's about to read should start in an async context.
+    next_fn_is_async: bool,
 }
 
 impl Parser {
@@ -29,7 +53,16 @@ impl Parser {
             type_annotations,
             annotation_pos: 0,
             no_in: false,
+            temp_counter: 0,
+            async_depth: 0,
+            next_fn_is_async: false,
         }
+    }
+
+    fn fresh_temp_name(&mut self) -> String {
+        let n = self.temp_counter;
+        self.temp_counter += 1;
+        format!("$destr${}", n)
     }
 
     /// Parse an expression with 'in' disallowed as a binary operator
@@ -67,8 +100,27 @@ impl Parser {
     fn parse_statement(&mut self) -> Result<Stmt> {
         match self.current() {
             Token::Var => self.parse_var_declaration(VarKind::Var),
+            // `let` is parsed as `var`. minfern doesn't yet model per-block
+            // lexical scoping or temporal-dead-zone rules, but var-with-block
+            // scoping is a sound over-approximation for type checking.
+            Token::Let => self.parse_var_declaration(VarKind::Var),
             Token::Const => self.parse_var_declaration(VarKind::Const),
             Token::Function => self.parse_function_declaration(),
+            Token::Class => self.parse_class_declaration(),
+            // `async function name(...) { body }` parses like a regular
+            // function declaration; `async` is consumed by the async-wrap
+            // helper which rewrites every `return` inside the body so the
+            // function's return type ends up as `Promise<T>`.
+            Token::Async if matches!(self.tokens.get(self.pos + 1).map(|s| &s.value), Some(Token::Function)) => {
+                self.advance(); // consume `async`
+                // Signal to the upcoming function parse that its body
+                // should start in an async context. The flag is a
+                // one-shot: the function parser reads and clears it
+                // before descending into the body.
+                self.next_fn_is_async = true;
+                let decl_result = self.parse_function_declaration();
+                Ok(Self::make_async_function_decl(decl_result?))
+            }
             Token::Import => self.parse_import_declaration(),
             Token::Export => self.parse_export_declaration(),
             Token::If => self.parse_if_statement(),
@@ -125,8 +177,14 @@ impl Parser {
         let mut declarations = Vec::new();
 
         loop {
-            let decl = self.parse_var_declarator(kind)?;
-            declarations.push(decl);
+            // A destructuring pattern at the start of a declarator desugars
+            // into a small sequence of ordinary declarators sharing a
+            // synthesised temp binding. Patterns may nest.
+            if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                declarations.extend(self.parse_destructuring_decl(kind)?);
+            } else {
+                declarations.push(self.parse_var_declarator(kind)?);
+            }
 
             if !self.consume_if(&Token::Comma) {
                 break;
@@ -142,6 +200,139 @@ impl Parser {
             declarations,
             span: Span::new(start, end),
         })
+    }
+
+    /// Parse a destructuring pattern (may be nested: `{a: {b: [c, d]}}`).
+    /// Doesn't emit declarators — caller passes the result to
+    /// [`Self::desugar_pattern`] along with a source expression.
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+        if self.check(&Token::LBrace) {
+            self.parse_object_pattern()
+        } else if self.check(&Token::LBracket) {
+            self.parse_array_pattern()
+        } else {
+            let span = self.current_span();
+            let name = self.expect_ident()?;
+            Ok(Pattern::Ident(name, span))
+        }
+    }
+
+    fn parse_object_pattern(&mut self) -> Result<Pattern> {
+        let start = self.current_span().start;
+        self.expect(&Token::LBrace)?;
+        let mut entries: Vec<(String, Pattern, Span)> = Vec::new();
+        while !self.check(&Token::RBrace) {
+            let entry_span = self.current_span();
+            let source = self.expect_ident()?;
+            let sub = if self.consume_if(&Token::Colon) {
+                self.parse_pattern()?
+            } else {
+                // Shorthand `{a}` is `{a: a}`.
+                Pattern::Ident(source.clone(), entry_span)
+            };
+            entries.push((source, sub, entry_span));
+            if !self.consume_if(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        let end = self.prev_span().end;
+        Ok(Pattern::Object(entries, Span::new(start, end)))
+    }
+
+    fn parse_array_pattern(&mut self) -> Result<Pattern> {
+        let start = self.current_span().start;
+        self.expect(&Token::LBracket)?;
+        let mut elems: Vec<Pattern> = Vec::new();
+        while !self.check(&Token::RBracket) {
+            elems.push(self.parse_pattern()?);
+            if !self.consume_if(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        let end = self.prev_span().end;
+        Ok(Pattern::Array(elems, Span::new(start, end)))
+    }
+
+    /// Produce a flat list of declarators that destructure `source` into
+    /// the bindings named by `pattern`. Object / array patterns recurse
+    /// through a fresh temp binding so arbitrarily nested patterns work.
+    fn desugar_pattern(
+        &mut self,
+        pattern: &Pattern,
+        source: Expr,
+        kind: VarKind,
+        decls: &mut Vec<VarDeclarator>,
+    ) {
+        match pattern {
+            Pattern::Ident(name, span) => {
+                decls.push(VarDeclarator {
+                    name: name.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+            }
+            Pattern::Object(entries, span) => {
+                let temp = self.fresh_temp_name();
+                decls.push(VarDeclarator {
+                    name: temp.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+                for (prop_name, sub, prop_span) in entries {
+                    let access = Expr::Member {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *prop_span,
+                        }),
+                        property: prop_name.clone(),
+                        span: *prop_span,
+                    };
+                    self.desugar_pattern(sub, access, kind, decls);
+                }
+            }
+            Pattern::Array(elems, span) => {
+                let temp = self.fresh_temp_name();
+                decls.push(VarDeclarator {
+                    name: temp.clone(),
+                    init: Some(source),
+                    type_annotation: None,
+                    kind,
+                    span: *span,
+                });
+                for (idx, sub) in elems.iter().enumerate() {
+                    let elem_span = *span;
+                    let access = Expr::ComputedMember {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: elem_span,
+                        }),
+                        property: Box::new(Expr::Lit {
+                            value: Literal::Number(idx as f64),
+                            span: elem_span,
+                        }),
+                        span: elem_span,
+                    };
+                    self.desugar_pattern(sub, access, kind, decls);
+                }
+            }
+        }
+    }
+
+    /// Parse `{pattern} = expr` or `[pattern] = expr` at declaration
+    /// position and return the desugared flat list of declarators.
+    fn parse_destructuring_decl(&mut self, kind: VarKind) -> Result<Vec<VarDeclarator>> {
+        let pattern = self.parse_pattern()?;
+        self.expect(&Token::Eq)?;
+        let init = self.parse_assignment_expression()?;
+        let mut decls = Vec::new();
+        self.desugar_pattern(&pattern, init, kind, &mut decls);
+        Ok(decls)
     }
 
     fn parse_var_declarator(&mut self, kind: VarKind) -> Result<VarDeclarator> {
@@ -270,8 +461,9 @@ impl Parser {
 
         // Check what we're exporting
         match self.current() {
-            Token::Var => {
-                // export var x = 1;
+            // `let` is treated as `var` for parsing purposes.
+            Token::Var | Token::Let => {
+                // export var x = 1;  (also: export let x = 1;)
                 self.advance();
                 let mut declarations = Vec::new();
                 loop {
@@ -324,7 +516,7 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let params = self.parse_parameters()?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
                 let func_span = Span::new(start, self.prev_span().end);
 
                 Ok(Stmt::Export {
@@ -361,6 +553,291 @@ impl Parser {
         }
     }
 
+    /// Parse a class declaration and desugar it into a factory function.
+    ///
+    /// `class Counter { constructor(n) { this.value = n; } inc() { ... } }`
+    /// becomes
+    /// `function Counter(n) { return { value: n, inc: function() {...} }; }`.
+    ///
+    /// Extends/super, static methods and private fields are not supported.
+    /// The constructor body must consist of `this.X = EXPR;` statements
+    /// only — those become the initial field values of the returned object
+    /// literal. Any other kind of constructor statement errors out; users
+    /// who need more should write the factory function directly.
+    fn parse_class_declaration(&mut self) -> Result<Stmt> {
+        let start = self.current_span().start;
+        self.expect(&Token::Class)?;
+        let name = self.expect_ident()?;
+
+        // Reject `extends Parent` for now; it'd need a real prototype chain
+        // to match runtime semantics and minfern has no inheritance.
+        if self.check(&Token::Extends) {
+            let span = self.current_span();
+            return Err(ParseError::UnexpectedToken {
+                found: "extends".to_string(),
+                expected: "{ (class inheritance is not supported)".to_string(),
+                span,
+            }
+            .into());
+        }
+
+        self.expect(&Token::LBrace)?;
+
+        let mut ctor_params: Vec<String> = Vec::new();
+        let mut field_props: Vec<PropDef> = Vec::new();
+        let mut method_props: Vec<PropDef> = Vec::new();
+
+        while !self.check(&Token::RBrace) && !self.is_at_end() {
+            // Skip empty separators (class bodies don't require semicolons
+            // between members but tolerate them).
+            if self.consume_if(&Token::Semicolon) {
+                continue;
+            }
+
+            let member_start = self.current_span().start;
+            let key_name = self.expect_ident()?;
+            let key_span = self.prev_span();
+
+            // Explicitly unsupported prefixes. `static` would need function-
+            // with-properties to model `Foo.bar()`; we have no inheritance
+            // or prototype chain either, so reject at parse time.
+            if key_name == "static" && matches!(self.current(), Token::Ident(_)) {
+                return Err(ParseError::UnexpectedToken {
+                    found: "static".to_string(),
+                    expected: "instance method (static class members are not supported; see examples/spa/gaps.md)".to_string(),
+                    span: key_span,
+                }
+                .into());
+            }
+
+            // `get name()` / `set name(param)` — accessor property. The
+            // body is a block just like a method; we emit PropDef::Getter /
+            // PropDef::Setter so the object-literal machinery types the
+            // result as the getter's return and the setter's assignment
+            // target.
+            if (key_name == "get" || key_name == "set")
+                && matches!(self.current(), Token::Ident(_))
+            {
+                let is_setter = key_name == "set";
+                let accessor_name = self.expect_ident()?;
+                self.expect(&Token::LParen)?;
+                let (params, prefix) = self.parse_parameters_with_prefix()?;
+                self.expect(&Token::RParen)?;
+                let body = Self::prepend_param_destructuring(
+                    self.parse_function_body_block()?,
+                    prefix,
+                );
+                let member_span = Span::new(member_start, self.prev_span().end);
+                let accessor = if is_setter {
+                    if params.len() != 1 {
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("{} parameters", params.len()),
+                            expected: "exactly one parameter for a setter".to_string(),
+                            span: member_span,
+                        }
+                        .into());
+                    }
+                    PropDef::Setter {
+                        key: PropKey::Ident(accessor_name),
+                        param: params.into_iter().next().unwrap(),
+                        body: Box::new(body),
+                        span: member_span,
+                    }
+                } else {
+                    if !params.is_empty() {
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("{} parameters", params.len()),
+                            expected: "no parameters for a getter".to_string(),
+                            span: member_span,
+                        }
+                        .into());
+                    }
+                    PropDef::Getter {
+                        key: PropKey::Ident(accessor_name),
+                        body: Box::new(body),
+                        span: member_span,
+                    }
+                };
+                method_props.push(accessor);
+                continue;
+            }
+
+            self.expect(&Token::LParen)?;
+            let params = self.parse_parameters()?;
+            self.expect(&Token::RParen)?;
+            let body_stmt = self.parse_function_body_block()?;
+            let member_span = Span::new(member_start, self.prev_span().end);
+
+            if key_name == "constructor" {
+                ctor_params = params;
+                // Extract field initialisations from the constructor body.
+                let stmts = match &body_stmt {
+                    Stmt::Block { body, .. } => body.clone(),
+                    _ => vec![body_stmt.clone()],
+                };
+                for s in stmts {
+                    match s {
+                        Stmt::Expr { expression, .. } => {
+                            if let Some((field, value, span)) =
+                                Parser::extract_this_assignment(&expression)
+                            {
+                                field_props.push(PropDef::Property {
+                                    key: PropKey::Ident(field),
+                                    value,
+                                    type_annotation: None,
+                                    span,
+                                });
+                            } else {
+                                return Err(ParseError::UnexpectedToken {
+                                    found: "complex expression".to_string(),
+                                    expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
+                                    span: expression.span(),
+                                }
+                                .into());
+                            }
+                        }
+                        other => {
+                            return Err(ParseError::UnexpectedToken {
+                                found: "statement".to_string(),
+                                expected: "this.FIELD = EXPR; (constructor is limited to simple field initialisers)".to_string(),
+                                span: other.span(),
+                            }
+                            .into());
+                        }
+                    }
+                }
+            } else {
+                method_props.push(PropDef::Method {
+                    key: PropKey::Ident(key_name),
+                    params,
+                    body: Box::new(body_stmt),
+                    span: member_span,
+                });
+            }
+
+            let _ = key_span; // kept only to document where the member name lived
+        }
+
+        self.expect(&Token::RBrace)?;
+        let end = self.prev_span().end;
+        let span = Span::new(start, end);
+
+        // Build the object literal: field properties first, then methods.
+        let mut all_props = field_props;
+        all_props.extend(method_props);
+        let obj_literal = Expr::Object {
+            properties: all_props,
+            span,
+        };
+
+        // Wrap the object literal in `function Name(ctor_params) { return <obj>; }`.
+        let body_block = Stmt::Block {
+            body: vec![Stmt::Return {
+                argument: Some(obj_literal),
+                span,
+            }],
+            span,
+        };
+
+        Ok(Stmt::FunctionDecl {
+            name,
+            params: ctor_params,
+            body: Box::new(body_block),
+            type_annotation: None,
+            span,
+        })
+    }
+
+    /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.
+    /// Any other expression returns None.
+    fn extract_this_assignment(expr: &Expr) -> Option<(String, Expr, Span)> {
+        if let Expr::Assign {
+            op: AssignOp::Assign,
+            left,
+            right,
+            span,
+        } = expr
+        {
+            if let Expr::Member {
+                object, property, ..
+            } = left.as_ref()
+            {
+                if matches!(object.as_ref(), Expr::This { .. }) {
+                    return Some((property.clone(), (**right).clone(), *span));
+                }
+            }
+        }
+        None
+    }
+
+    /// Wrap an `async function` declaration so its return type becomes
+    /// `Promise<T>`. The body is lifted into an IIFE and handed to
+    /// `Promise.resolve`, turning `async function foo(x) { return x + 1; }`
+    /// into `function foo(x) { return Promise.resolve((function() { return x + 1; })()); }`.
+    ///
+    /// Inference then types `foo` as `(T) => Promise<T>` with no extra
+    /// cases. `await e` inside the original body continues to be
+    /// expressed via `UnaryOp::Await`, which the inference rule for
+    /// unary ops turns into the inner type of its operand's `Promise<T>`.
+    fn make_async_function_decl(decl: Stmt) -> Stmt {
+        if let Stmt::FunctionDecl {
+            name,
+            params,
+            body,
+            type_annotation,
+            span,
+        } = decl
+        {
+            let new_body = Self::wrap_body_in_promise_resolve(body, span);
+            Stmt::FunctionDecl {
+                name,
+                params,
+                body: new_body,
+                type_annotation,
+                span,
+            }
+        } else {
+            decl
+        }
+    }
+
+    fn wrap_body_in_promise_resolve(body: Box<Stmt>, span: Span) -> Box<Stmt> {
+        // (function () { ...body... })()
+        let iife = Expr::Function {
+            name: None,
+            params: vec![],
+            body,
+            type_annotation: None,
+            span,
+        };
+        let iife_call = Expr::Call {
+            callee: Box::new(iife),
+            arguments: vec![],
+            span,
+        };
+        // Promise.resolve(<iife_call>)
+        let resolve_call = Expr::Call {
+            callee: Box::new(Expr::Member {
+                object: Box::new(Expr::Ident {
+                    name: "Promise".to_string(),
+                    span,
+                }),
+                property: "resolve".to_string(),
+                span,
+            }),
+            arguments: vec![iife_call],
+            span,
+        };
+        // { return <resolve_call>; }
+        Box::new(Stmt::Block {
+            body: vec![Stmt::Return {
+                argument: Some(resolve_call),
+                span,
+            }],
+            span,
+        })
+    }
+
     fn parse_function_declaration(&mut self) -> Result<Stmt> {
         let start = self.current_span().start;
         let func_span = self.current_span();
@@ -373,10 +850,13 @@ impl Parser {
         let type_annotation = self.try_get_type_annotation_for_function(func_span, &name);
 
         self.expect(&Token::LParen)?;
-        let params = self.parse_parameters()?;
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
         self.expect(&Token::RParen)?;
 
-        let body = Box::new(self.parse_block_statement()?);
+        let body = Box::new(Self::prepend_param_destructuring(
+            self.parse_function_body_block()?,
+            prefix,
+        ));
 
         Ok(Stmt::FunctionDecl {
             name,
@@ -387,12 +867,45 @@ impl Parser {
         })
     }
 
-    fn parse_parameters(&mut self) -> Result<Vec<String>> {
-        let mut params = Vec::new();
+    /// Parse a comma-separated parameter list. A parameter may be a plain
+    /// identifier or a destructuring pattern; pattern parameters synthesise
+    /// a fresh temp name in the returned name list and emit the
+    /// corresponding destructuring into `prefix_stmts`, which callers
+    /// prepend to the function body.
+    fn parse_parameters_with_prefix(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<Stmt>)> {
+        let mut names = Vec::new();
+        let mut prefix = Vec::new();
 
         if !self.check(&Token::RParen) {
             loop {
-                params.push(self.expect_ident()?);
+                if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                    let pattern = self.parse_pattern()?;
+                    let temp = self.fresh_temp_name();
+                    let pattern_span = Span::new(
+                        self.prev_span().start,
+                        self.prev_span().end,
+                    );
+                    let mut decls = Vec::new();
+                    self.desugar_pattern(
+                        &pattern,
+                        Expr::Ident {
+                            name: temp.clone(),
+                            span: pattern_span,
+                        },
+                        VarKind::Var,
+                        &mut decls,
+                    );
+                    prefix.push(Stmt::Var {
+                        kind: VarKind::Var,
+                        declarations: decls,
+                        span: pattern_span,
+                    });
+                    names.push(temp);
+                } else {
+                    names.push(self.expect_ident()?);
+                }
 
                 if !self.consume_if(&Token::Comma) {
                     break;
@@ -400,7 +913,67 @@ impl Parser {
             }
         }
 
-        Ok(params)
+        Ok((names, prefix))
+    }
+
+    /// Parse a function body block, establishing a fresh async context.
+    /// The body starts in an async context iff `next_fn_is_async` was set
+    /// by the caller (e.g. the `async function` arm) — every other path
+    /// starts at async_depth = 0, so `await` inside a plain function
+    /// nested in an async one correctly errors.
+    fn parse_function_body_block(&mut self) -> Result<Stmt> {
+        let saved = self.async_depth;
+        let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
+        self.async_depth = if is_async { 1 } else { 0 };
+        let result = self.parse_block_statement();
+        self.async_depth = saved;
+        result
+    }
+
+    /// Thin wrapper for sites that know they don't have patterns (e.g.
+    /// the deliberately-restricted class constructor parameters).
+    fn parse_parameters(&mut self) -> Result<Vec<String>> {
+        let (names, prefix) = self.parse_parameters_with_prefix()?;
+        if !prefix.is_empty() {
+            let span = prefix[0].span();
+            return Err(ParseError::UnexpectedToken {
+                found: "destructuring pattern".to_string(),
+                expected: "plain parameter name".to_string(),
+                span,
+            }
+            .into());
+        }
+        Ok(names)
+    }
+
+    /// Given a function body and any destructuring statements synthesised
+    /// from pattern parameters, prepend them inside the body's block.
+    fn prepend_param_destructuring(body: Stmt, prefix: Vec<Stmt>) -> Stmt {
+        if prefix.is_empty() {
+            return body;
+        }
+        match body {
+            Stmt::Block {
+                body: mut stmts,
+                span,
+            } => {
+                let mut new_stmts = prefix;
+                new_stmts.append(&mut stmts);
+                Stmt::Block {
+                    body: new_stmts,
+                    span,
+                }
+            }
+            other => {
+                let span = other.span();
+                let mut new_stmts = prefix;
+                new_stmts.push(other);
+                Stmt::Block {
+                    body: new_stmts,
+                    span,
+                }
+            }
+        }
     }
 
     fn parse_if_statement(&mut self) -> Result<Stmt> {
@@ -477,10 +1050,98 @@ impl Parser {
         self.expect(&Token::For)?;
         self.expect(&Token::LParen)?;
 
-        // Parse init
-        let init_or_lhs = if self.check(&Token::Var) {
+        // Parse init. `let i` in a for-init is treated identically to `var i`.
+        let init_or_lhs = if self.check(&Token::Var) || self.check(&Token::Let) {
             let var_start = self.current_span().start;
             self.advance();
+
+            // `for (let {a, b} of arr) { ... }` — a destructuring pattern
+            // on the LHS. We desugar to a for-of over a synthesised temp,
+            // prepending a destructuring declaration at the top of the
+            // loop body so the pattern's bindings are in scope.
+            if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                let pattern = self.parse_pattern()?;
+                if self.check(&Token::In) || self.check(&Token::Of) {
+                    let is_of = self.check(&Token::Of);
+                    self.advance();
+                    let right = self.parse_expression()?;
+                    self.expect(&Token::RParen)?;
+                    let body = self.parse_statement()?;
+
+                    let temp = self.fresh_temp_name();
+                    let pattern_span = Span::new(var_start, self.prev_span().end);
+                    // Build the destructuring declarations, initialised from
+                    // the synthesised temp name.
+                    let mut destr_decls = Vec::new();
+                    self.desugar_pattern(
+                        &pattern,
+                        Expr::Ident {
+                            name: temp.clone(),
+                            span: pattern_span,
+                        },
+                        VarKind::Var,
+                        &mut destr_decls,
+                    );
+                    let destr_stmt = Stmt::Var {
+                        kind: VarKind::Var,
+                        declarations: destr_decls,
+                        span: pattern_span,
+                    };
+
+                    // Prepend the destructuring to the body.
+                    let new_body = match body {
+                        Stmt::Block {
+                            body: mut body_stmts,
+                            span: body_span,
+                        } => {
+                            let mut new_stmts = Vec::with_capacity(body_stmts.len() + 1);
+                            new_stmts.push(destr_stmt);
+                            new_stmts.append(&mut body_stmts);
+                            Stmt::Block {
+                                body: new_stmts,
+                                span: body_span,
+                            }
+                        }
+                        other => {
+                            let body_span = other.span();
+                            Stmt::Block {
+                                body: vec![destr_stmt, other],
+                                span: body_span,
+                            }
+                        }
+                    };
+
+                    let for_span = Span::new(start, self.prev_span().end);
+                    return if is_of {
+                        Ok(Stmt::ForOf {
+                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            right,
+                            body: Box::new(new_body),
+                            span: for_span,
+                        })
+                    } else {
+                        Ok(Stmt::ForIn {
+                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            right,
+                            body: Box::new(new_body),
+                            span: for_span,
+                        })
+                    };
+                } else {
+                    // Destructuring in a C-style `for (init; test; update)`
+                    // head would bind names only used for one iteration,
+                    // which rarely makes sense. Reject and point the user
+                    // at the for-of form.
+                    let span = self.current_span();
+                    return Err(ParseError::UnexpectedToken {
+                        found: format!("{}", self.current()),
+                        expected: "'of' or 'in' (destructuring pattern is only supported in for-of/for-in)".to_string(),
+                        span,
+                    }
+                    .into());
+                }
+            }
+
             let name = self.expect_ident()?;
             let var_end = self.prev_span().end;
             let type_annotation = self.try_get_type_annotation(self.current_span(), &name);
@@ -814,6 +1475,14 @@ impl Parser {
     }
 
     fn parse_assignment_expression(&mut self) -> Result<Expr> {
+        // Arrow functions are the only expression whose start overlaps with
+        // a parenthesised expression or a bare identifier, so we look ahead
+        // for a `=>` and take that path before falling back to the regular
+        // assignment grammar.
+        if self.looks_like_arrow_function() {
+            return self.parse_arrow_function();
+        }
+
         let expr = self.parse_conditional_expression()?;
 
         if let Some(op) = self.assignment_op() {
@@ -943,12 +1612,26 @@ impl Parser {
             Token::Typeof => Some(UnaryOp::Typeof),
             Token::Void => Some(UnaryOp::Void),
             Token::Delete => Some(UnaryOp::Delete),
+            Token::Await => Some(UnaryOp::Await),
             Token::PlusPlus => Some(UnaryOp::PreInc),
             Token::MinusMinus => Some(UnaryOp::PreDec),
             _ => None,
         };
 
         if let Some(op) = op {
+            // `await` is a parse error outside of an async function body.
+            // Keyword tokens are what trigger this branch, so a stray
+            // `await` in a regular function already fails — we just give
+            // a nicer message.
+            if matches!(op, UnaryOp::Await) && self.async_depth == 0 {
+                let span = self.current_span();
+                return Err(ParseError::UnexpectedToken {
+                    found: "await".to_string(),
+                    expected: "expression (await is only valid inside an async function)".to_string(),
+                    span,
+                }
+                .into());
+            }
             self.advance();
             let argument = self.parse_unary_expression()?;
 
@@ -1309,7 +1992,7 @@ impl Parser {
                 let key = self.parse_property_key()?;
                 self.expect(&Token::LParen)?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
 
                 return Ok(PropDef::Getter {
                     key,
@@ -1324,7 +2007,7 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let param = self.expect_ident()?;
                 self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_block_statement()?);
+                let body = Box::new(self.parse_function_body_block()?);
 
                 return Ok(PropDef::Setter {
                     key,
@@ -1340,9 +2023,12 @@ impl Parser {
         // Check for method shorthand
         if self.check(&Token::LParen) {
             self.advance();
-            let params = self.parse_parameters()?;
+            let (params, prefix) = self.parse_parameters_with_prefix()?;
             self.expect(&Token::RParen)?;
-            let body = Box::new(self.parse_block_statement()?);
+            let body = Box::new(Self::prepend_param_destructuring(
+                self.parse_function_body_block()?,
+                prefix,
+            ));
 
             return Ok(PropDef::Method {
                 key,
@@ -1352,6 +2038,15 @@ impl Parser {
             });
         }
 
+        // Per-field type annotation: `key /*: T */: value`. We look it up by
+        // the key name *before* consuming the colon, so the scanner's
+        // `last_ident = key` at the time of the `/*:` lines up.
+        let type_annotation = if let PropKey::Ident(name) = &key {
+            self.try_get_type_annotation(self.current_span(), name)
+        } else {
+            None
+        };
+
         // Regular property
         self.expect(&Token::Colon)?;
         let value = self.parse_assignment_expression()?;
@@ -1359,6 +2054,7 @@ impl Parser {
         Ok(PropDef::Property {
             key,
             value,
+            type_annotation,
             span: Span::new(start, self.prev_span().end),
         })
     }
@@ -1400,6 +2096,7 @@ impl Parser {
         matches!(
             token,
             Token::Var
+                | Token::Let
                 | Token::Const
                 | Token::Function
                 | Token::If
@@ -1439,6 +2136,7 @@ impl Parser {
     fn keyword_to_string(&self, token: &Token) -> String {
         match token {
             Token::Var => "var",
+            Token::Let => "let",
             Token::Const => "const",
             Token::Function => "function",
             Token::If => "if",
@@ -1471,9 +2169,129 @@ impl Parser {
             Token::Export => "export",
             Token::From => "from",
             Token::As => "as",
+            Token::Class => "class",
+            Token::Extends => "extends",
+            Token::Super => "super",
+            Token::Async => "async",
+            Token::Await => "await",
             _ => unreachable!("keyword_to_string called on non-keyword"),
         }
         .to_string()
+    }
+
+    /// Lookahead: is the token stream at this point the head of an arrow
+    /// function? Accepts `ident =>`, `() =>`, and `(ident [, ident]*) =>`.
+    /// Does not consume anything.
+    fn looks_like_arrow_function(&self) -> bool {
+        // Simple param: `ident =>`
+        if matches!(self.current(), Token::Ident(_)) {
+            return self.tokens
+                .get(self.pos + 1)
+                .map(|s| matches!(s.value, Token::FatArrow))
+                .unwrap_or(false);
+        }
+
+        // Parenthesised params: `(` ... `)` `=>`. We only need to know
+        // whether the matching `)` is immediately followed by `=>`, so we
+        // track nesting for every kind of bracket and ignore everything
+        // else. Pattern parameters (`({x})`, `([a, b])`) go through here
+        // just fine — the inner braces/brackets are balanced like any
+        // other group.
+        if matches!(self.current(), Token::LParen) {
+            let mut i = self.pos + 1;
+            let mut paren_depth: i32 = 1;
+            let mut brace_depth: i32 = 0;
+            let mut bracket_depth: i32 = 0;
+            while let Some(tok) = self.tokens.get(i) {
+                match &tok.value {
+                    Token::LParen => paren_depth += 1,
+                    Token::RParen => {
+                        paren_depth -= 1;
+                        if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                            return self.tokens
+                                .get(i + 1)
+                                .map(|s| matches!(s.value, Token::FatArrow))
+                                .unwrap_or(false);
+                        }
+                    }
+                    Token::LBrace => brace_depth += 1,
+                    Token::RBrace => brace_depth -= 1,
+                    Token::LBracket => bracket_depth += 1,
+                    Token::RBracket => bracket_depth -= 1,
+                    Token::Eof => return false,
+                    _ => {}
+                }
+                i += 1;
+            }
+            return false;
+        }
+
+        false
+    }
+
+    /// Parse an arrow function. Called after [`looks_like_arrow_function`]
+    /// has confirmed we're at the head of one, so all of the error paths
+    /// below correspond to an actual malformed arrow.
+    ///
+    /// Lowers to `Expr::Function`: a block body becomes the function body
+    /// directly, an expression body becomes a synthesised `return <expr>;`.
+    fn parse_arrow_function(&mut self) -> Result<Expr> {
+        let start = self.current_span().start;
+
+        // Parse parameters.
+        let (params, prefix): (Vec<String>, Vec<Stmt>) =
+            if matches!(self.current(), Token::Ident(_)) {
+                // Single-identifier form: `x => ...`
+                let name = self.expect_ident()?;
+                (vec![name], vec![])
+            } else {
+                self.expect(&Token::LParen)?;
+                let result = self.parse_parameters_with_prefix()?;
+                self.expect(&Token::RParen)?;
+                result
+            };
+
+        self.expect(&Token::FatArrow)?;
+
+        // Arrow functions establish their own function body scope, same
+        // as any other callable form. Non-async arrows reset async_depth
+        // to 0 for the duration of their body, which correctly rejects
+        // `await` inside an arrow nested in a regular function.
+        let saved_async = self.async_depth;
+        let is_async = std::mem::replace(&mut self.next_fn_is_async, false);
+        self.async_depth = if is_async { 1 } else { 0 };
+
+        // Body: block `{ ... }` or a single expression.
+        let body = if self.check(&Token::LBrace) {
+            Box::new(Self::prepend_param_destructuring(
+                self.parse_block_statement()?,
+                prefix,
+            ))
+        } else {
+            let expr_start = self.current_span().start;
+            let expr = self.parse_assignment_expression()?;
+            let expr_end = self.prev_span().end;
+            let return_span = Span::new(expr_start, expr_end);
+            let mut stmts = prefix;
+            stmts.push(Stmt::Return {
+                argument: Some(expr),
+                span: return_span,
+            });
+            Box::new(Stmt::Block {
+                body: stmts,
+                span: return_span,
+            })
+        };
+
+        self.async_depth = saved_async;
+
+        Ok(Expr::Function {
+            name: None,
+            params,
+            body,
+            type_annotation: None,
+            span: Span::new(start, self.prev_span().end),
+        })
     }
 
     fn parse_function_expression(&mut self) -> Result<Expr> {
@@ -1497,10 +2315,13 @@ impl Parser {
         };
 
         self.expect(&Token::LParen)?;
-        let params = self.parse_parameters()?;
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
         self.expect(&Token::RParen)?;
 
-        let body = Box::new(self.parse_block_statement()?);
+        let body = Box::new(Self::prepend_param_destructuring(
+            self.parse_function_body_block()?,
+            prefix,
+        ));
 
         Ok(Expr::Function {
             name,

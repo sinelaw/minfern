@@ -16,6 +16,9 @@ pub struct Scanner<'a> {
     /// Stack of template literal depth (for nested templates)
     /// When > 0, a `}` should be scanned as template continuation
     template_depth: usize,
+    /// Most recently emitted identifier and its end position, used to
+    /// attach inline `/*: T */` annotations to the name that precedes them.
+    last_ident: Option<(String, usize)>,
 }
 
 impl<'a> Scanner<'a> {
@@ -27,6 +30,7 @@ impl<'a> Scanner<'a> {
             type_annotations: Vec::new(),
             last_token_allows_regex: true, // At start of file, / is regex
             template_depth: 0,
+            last_ident: None,
         }
     }
 
@@ -189,6 +193,11 @@ impl<'a> Scanner<'a> {
         };
 
         self.update_regex_context(&token);
+        // Remember the last identifier so a following inline `/*: T */`
+        // annotation can be attached to it.
+        if let Token::Ident(name) = &token {
+            self.last_ident = Some((name.clone(), self.current_pos));
+        }
         Ok(Spanned::new(token, Span::new(start, self.current_pos)))
     }
 
@@ -234,6 +243,23 @@ impl<'a> Scanner<'a> {
                             let start = self.current_pos;
                             self.advance(); // /
                             self.advance(); // *
+
+                            // Inline `/*: T */` annotation: attaches to the
+                            // most recently emitted identifier.
+                            if self.peek().map(|(_, c)| c == ':').unwrap_or(false) {
+                                self.advance(); // consume ':'
+                                self.skip_whitespace();
+                                let content = self.read_until_comment_end();
+                                self.consume_comment_end();
+                                if let Some((name, _)) = self.last_ident.clone() {
+                                    self.type_annotations.push(TypeAnnotation {
+                                        name,
+                                        content: content.trim().to_string(),
+                                        span: Span::new(start, self.current_pos),
+                                    });
+                                }
+                                continue;
+                            }
 
                             // Check if this is a doc comment /**
                             if self.peek().map(|(_, c)| c == '*').unwrap_or(false) {
@@ -512,6 +538,10 @@ impl<'a> Scanner<'a> {
                     }
                     _ => Token::EqEq,
                 }
+            }
+            Some((_, '>')) => {
+                self.advance();
+                Token::FatArrow
             }
             _ => Token::Eq,
         }
@@ -1066,21 +1096,34 @@ impl<'a> Scanner<'a> {
     fn read_until_comma_or_end(&mut self) -> String {
         let mut content = String::new();
         let mut paren_depth: i32 = 0;
+        let mut brace_depth: i32 = 0;
+        let mut angle_depth: i32 = 0;
 
         while let Some((_, ch)) = self.peek() {
             // Check for end of comment
             if ch == '*' && self.peek_next() == Some('/') {
                 break;
             }
-            // Comma at top level ends this type annotation
-            if ch == ',' && paren_depth == 0 {
+            // Comma at top level ends this type annotation. Commas inside
+            // parens `(A, B) => C`, braces `{a: T, b: U}` and angle
+            // brackets `<T, U>` are part of the current type.
+            if ch == ',' && paren_depth == 0 && brace_depth == 0 && angle_depth == 0 {
                 break;
             }
-            // Track parentheses for function types like (A, B) => C
             if ch == '(' {
                 paren_depth += 1;
             } else if ch == ')' {
                 paren_depth = paren_depth.saturating_sub(1);
+            } else if ch == '{' {
+                brace_depth += 1;
+            } else if ch == '}' {
+                brace_depth = brace_depth.saturating_sub(1);
+            } else if ch == '<' {
+                angle_depth += 1;
+            } else if ch == '>' && angle_depth > 0 {
+                // Only treat `>` as closing if we opened one. Otherwise it's
+                // part of `=>`, which shouldn't affect nesting.
+                angle_depth -= 1;
             }
             content.push(ch);
             self.advance();

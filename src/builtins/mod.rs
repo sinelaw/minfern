@@ -11,83 +11,14 @@ use crate::lexer::Span;
 use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
 
 /// Create the initial type environment with built-in bindings.
+///
+/// Only bindings that need to be truly polymorphic (each lookup instantiates
+/// fresh type variables) live here. Non-polymorphic bindings — `console`,
+/// `Math`, `JSON`, `parseInt`, `parseFloat`, `isNaN`, `isFinite` and the DOM
+/// surface — are declared in `stdlib/*.d.js` and loaded via
+/// [`crate::stdlib::initial_env_with_stdlib`].
 pub fn initial_env() -> TypeEnv {
     let mut env = TypeEnv::empty();
-
-    // console object with log method
-    let console_type = Type::object([
-        (
-            "log",
-            Type::simple_func(vec![Type::flex(100)], Type::Undefined),
-        ),
-        (
-            "error",
-            Type::simple_func(vec![Type::flex(101)], Type::Undefined),
-        ),
-        (
-            "warn",
-            Type::simple_func(vec![Type::flex(102)], Type::Undefined),
-        ),
-    ]);
-    env = env.extend("console".to_string(), TypeScheme::mono(console_type));
-
-    // Math object
-    let math_type = Type::object([
-        ("PI", Type::Number),
-        ("E", Type::Number),
-        ("abs", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("floor", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("ceil", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("round", Type::simple_func(vec![Type::Number], Type::Number)),
-        ("sqrt", Type::simple_func(vec![Type::Number], Type::Number)),
-        (
-            "pow",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        (
-            "min",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        (
-            "max",
-            Type::simple_func(vec![Type::Number, Type::Number], Type::Number),
-        ),
-        ("random", Type::simple_func(vec![], Type::Number)),
-    ]);
-    env = env.extend("Math".to_string(), TypeScheme::mono(math_type));
-
-    // JSON object
-    let json_type = Type::object([
-        (
-            "parse",
-            Type::simple_func(vec![Type::String], Type::flex(103)),
-        ),
-        (
-            "stringify",
-            Type::simple_func(vec![Type::flex(104)], Type::String),
-        ),
-    ]);
-    env = env.extend("JSON".to_string(), TypeScheme::mono(json_type));
-
-    // parseInt, parseFloat
-    env = env.extend(
-        "parseInt".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::String], Type::Number)),
-    );
-    env = env.extend(
-        "parseFloat".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::String], Type::Number)),
-    );
-
-    // isNaN, isFinite
-    env = env.extend(
-        "isNaN".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::Number], Type::Boolean)),
-    );
-    env = env.extend(
-        "isFinite".to_string(),
-        TypeScheme::mono(Type::simple_func(vec![Type::Number], Type::Boolean)),
-    );
 
     // undefined and null are keywords, but we can add them as values too
     env = env.extend("undefined".to_string(), TypeScheme::mono(Type::Undefined));
@@ -138,6 +69,179 @@ pub fn initial_env() -> TypeEnv {
     );
 
     env
+}
+
+/// Look up a built-in String prototype method by name.
+///
+/// Returns a fresh function type each call: for polymorphic methods the
+/// caller can unify the type variables with concrete argument types
+/// without affecting other call sites. For monomorphic methods the
+/// types are constants (no vars to freshen).
+///
+/// Used from `infer_member_from_type` when a property is accessed on a
+/// value of type `String`.
+pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    let n = Type::Number;
+    let s = Type::String;
+    let b = Type::Boolean;
+    Some(match method {
+        "indexOf" => Type::simple_func(vec![s.clone()], n.clone()),
+        "lastIndexOf" => Type::simple_func(vec![s.clone()], n.clone()),
+        "substring" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
+        "substr" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
+        "slice" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
+        "split" => Type::simple_func(vec![s.clone()], Type::array(s.clone())),
+        "trim" => Type::simple_func(vec![], s.clone()),
+        "trimStart" => Type::simple_func(vec![], s.clone()),
+        "trimEnd" => Type::simple_func(vec![], s.clone()),
+        "replace" => Type::simple_func(vec![s.clone(), s.clone()], s.clone()),
+        "replaceAll" => Type::simple_func(vec![s.clone(), s.clone()], s.clone()),
+        "toUpperCase" => Type::simple_func(vec![], s.clone()),
+        "toLowerCase" => Type::simple_func(vec![], s.clone()),
+        "charAt" => Type::simple_func(vec![n.clone()], s.clone()),
+        "charCodeAt" => Type::simple_func(vec![n.clone()], n.clone()),
+        "startsWith" => Type::simple_func(vec![s.clone()], b.clone()),
+        "endsWith" => Type::simple_func(vec![s.clone()], b.clone()),
+        "includes" => Type::simple_func(vec![s.clone()], b.clone()),
+        "repeat" => Type::simple_func(vec![n.clone()], s.clone()),
+        "padStart" => Type::simple_func(vec![n.clone(), s.clone()], s.clone()),
+        "padEnd" => Type::simple_func(vec![n.clone(), s.clone()], s.clone()),
+        "concat" => Type::simple_func(vec![s.clone()], s.clone()),
+        "toString" => Type::simple_func(vec![], s.clone()),
+        _ => {
+            let _ = (state, n, s, b);
+            return None;
+        }
+    })
+}
+
+/// Look up a built-in Array prototype method by name for an array whose
+/// element type is `elem`.
+///
+/// Polymorphic methods like `map` and `reduce` get fresh type variables
+/// from the caller's `InferState`; unification during the surrounding
+/// call expression binds them.
+pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    let n = Type::Number;
+    let s = Type::String;
+    let b = Type::Boolean;
+    let u = Type::Undefined;
+    let arr = Type::array(elem.clone());
+    Some(match method {
+        "push" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "pop" => Type::simple_func(vec![], elem.clone()),
+        "shift" => Type::simple_func(vec![], elem.clone()),
+        "unshift" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "indexOf" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "lastIndexOf" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "includes" => Type::simple_func(vec![elem.clone()], b.clone()),
+        "slice" => Type::simple_func(vec![n.clone(), n.clone()], arr.clone()),
+        "concat" => Type::simple_func(vec![arr.clone()], arr.clone()),
+        "join" => Type::simple_func(vec![s.clone()], s.clone()),
+        "reverse" => Type::simple_func(vec![], arr.clone()),
+        "sort" => Type::simple_func(vec![], arr.clone()),
+        "fill" => Type::simple_func(vec![elem.clone()], arr.clone()),
+        "find" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], b.clone())],
+            elem.clone(),
+        ),
+        "findIndex" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], b.clone())],
+            n.clone(),
+        ),
+        "forEach" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], u.clone())],
+            u.clone(),
+        ),
+        "filter" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], b.clone())],
+            arr.clone(),
+        ),
+        "some" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], b.clone())],
+            b.clone(),
+        ),
+        "every" => Type::simple_func(
+            vec![Type::simple_func(vec![elem.clone()], b.clone())],
+            b.clone(),
+        ),
+        // Polymorphic: map produces an array of a fresh element type U.
+        "map" => {
+            let u_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![Type::simple_func(vec![elem.clone()], u_var.clone())],
+                Type::array(u_var),
+            )
+        }
+        // Polymorphic: reduce carries an accumulator of a fresh type U.
+        "reduce" => {
+            let u_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![
+                    Type::simple_func(vec![u_var.clone(), elem.clone()], u_var.clone()),
+                    u_var.clone(),
+                ],
+                u_var,
+            )
+        }
+        "reduceRight" => {
+            let u_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![
+                    Type::simple_func(vec![u_var.clone(), elem.clone()], u_var.clone()),
+                    u_var.clone(),
+                ],
+                u_var,
+            )
+        }
+        "toString" => Type::simple_func(vec![], s.clone()),
+        _ => {
+            let _ = (n, s, b, u, arr);
+            return None;
+        }
+    })
+}
+
+/// Look up a built-in Promise prototype method.
+///
+/// `inner` is the `T` in `Promise<T>`. Each call produces a fresh function
+/// type so call sites don't unify their result types together.
+///
+/// `.then` here commits to the "callback must return a Promise" shape
+/// (`(T) => Promise<U>) => Promise<U>`) rather than the JS-spec
+/// `(T) => U | Promise<U>` form, because minfern has no union types.
+/// Users passing a plain-value callback should return `Promise.resolve(v)`
+/// or make the function `async`.
+pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -> Option<Type> {
+    Some(match method {
+        "then" => {
+            let u_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![Type::simple_func(
+                    vec![inner.clone()],
+                    Type::promise(u_var.clone()),
+                )],
+                Type::promise(u_var),
+            )
+        }
+        "catch" => {
+            // (error -> Promise<T>) -> Promise<T>. error is a fresh var
+            // since minfern has no single "Error" type.
+            let err_var = state.fresh_type_var();
+            Type::simple_func(
+                vec![Type::simple_func(
+                    vec![err_var],
+                    Type::promise(inner.clone()),
+                )],
+                Type::promise(inner.clone()),
+            )
+        }
+        "finally" => Type::simple_func(
+            vec![Type::simple_func(vec![], Type::Undefined)],
+            Type::promise(inner.clone()),
+        ),
+        _ => return None,
+    })
 }
 
 impl InferState {
@@ -279,9 +383,12 @@ mod tests {
     #[test]
     fn test_initial_env() {
         let env = initial_env();
-        assert!(env.lookup("console").is_some());
-        assert!(env.lookup("Math").is_some());
-        assert!(env.lookup("JSON").is_some());
+        // Polymorphic primitives live in the Rust env; library-shaped
+        // bindings have moved to stdlib/*.d.js.
+        assert!(env.lookup("Array").is_some());
+        assert!(env.lookup("String").is_some());
+        assert!(env.lookup("Number").is_some());
+        assert!(env.lookup("undefined").is_some());
     }
 
     #[test]
