@@ -18,7 +18,7 @@ what changed and why.
 | 7 | `String` and `String[]` collide under indexing       | open         |
 | 8 | Generic row-polymorphic helpers "forget" fields      | open         |
 | 9 | Control-flow-dependent return typing is strict       | open         |
-| 10| No ergonomic way to seed an empty typed collection   | open         |
+| 10| No ergonomic way to seed an empty typed collection   | *resolved*   |
 | 11| No arrow functions                                   | *resolved*   |
 | 12| No `let`                                             | *resolved*   |
 | 13| No destructuring / spread / rest                     | open         |
@@ -153,16 +153,23 @@ function's return type to `Undefined`, and the trailing path must then
 also return `undefined` explicitly. Handler bodies still need an explicit
 `return undefined;` at the end (see `app.js` event handlers).
 
-### 10. No ergonomic way to seed an empty typed collection
+### 10. No ergonomic way to seed an empty typed collection *(resolved)*
+
+An annotation on a `var`/`let`/`const` declaration with an initializer
+works today — the annotation is parsed, unified with the initializer's
+inferred type, and further operations are checked against the result:
 
 ```js
-var todos = [];           // a[]
-todos[0] = {...};         // locks in the type
+/** var todos: {id: Number, text: String, done: Boolean}[] */
+var todos = [];
+
+todos.push({id: 1, text: "hi", done: false});   // OK
+todos.push({id: "bad", text: "hi", done: false}); // Type error
 ```
 
-The SPA avoids this by seeding `state.todos` with two entries at init.
-For a production app you'd want either an annotation
-(`var todos /*: Todo[] */ = [];`) or a type alias.
+The SPA still seeds `state.todos` with two entries for illustrative
+reasons, but the annotation form works and is now mentioned in the
+comment above `state` so readers know the option is there.
 
 ### 13. No destructuring / spread / rest
 

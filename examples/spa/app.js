@@ -21,6 +21,10 @@
 // ---------------------------------------------------------------------------
 // State. Seeding the todos list with two entries fixes its element type to
 // {id: Number, text: String, done: Boolean} without needing annotations.
+// An explicit annotation like
+//     /** var todos: {id: Number, text: String, done: Boolean}[] */
+//     var todos = [];
+// works equivalently if you'd rather start empty.
 // ---------------------------------------------------------------------------
 
 let state = {
