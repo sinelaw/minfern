@@ -655,9 +655,15 @@ impl<'a> Decorator<'a> {
 
     fn decorate_prop(&mut self, prop: &PropDef, env: &TypeEnv) -> PropDef {
         match prop {
-            PropDef::Property { key, value, span } => PropDef::Property {
+            PropDef::Property {
+                key,
+                value,
+                type_annotation,
+                span,
+            } => PropDef::Property {
                 key: key.clone(),
                 value: self.decorate_expr(value, env),
+                type_annotation: type_annotation.clone(),
                 span: *span,
             },
             PropDef::Getter { key, body, span } => PropDef::Getter {

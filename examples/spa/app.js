@@ -21,20 +21,17 @@
 //   - async / await and Promise<T> for the "Save" button demo.
 
 // ---------------------------------------------------------------------------
-// State. The inline annotation pins the element type of `todos` so we can
-// start empty; without it, `todos: []` would be inferred as `a[]` until the
-// first push. The extra `todos.push(...)` calls below seed a couple of rows
-// of initial content without fighting the type.
+// State. Each field carries its own inline annotation, which pins the
+// element type of `todos` so we can start empty (without it, `todos: []`
+// would be inferred as `a[]` until the first push). The extra
+// `todos.push(...)` calls below seed a couple of rows of initial content
+// without fighting the type.
 // ---------------------------------------------------------------------------
 
-let state /*: {
-    todos: {id: Number, text: String, done: Boolean}[],
-    nextId: Number,
-    filter: String
-} */ = {
-    todos: [],
-    nextId: 1,
-    filter: "all"
+let state = {
+    todos  /*: {id: Number, text: String, done: Boolean}[] */: [],
+    nextId /*: Number */: 1,
+    filter /*: String */: "all"
 };
 state.todos.push({id: 1, text: "Try editing this todo list", done: false});
 state.todos.push({id: 2, text: "Read examples/spa/app.js", done: true});

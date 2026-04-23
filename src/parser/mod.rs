@@ -577,6 +577,7 @@ impl Parser {
                                 field_props.push(PropDef::Property {
                                     key: PropKey::Ident(field),
                                     value,
+                                    type_annotation: None,
                                     span,
                                 });
                             } else {
@@ -1730,6 +1731,15 @@ impl Parser {
             });
         }
 
+        // Per-field type annotation: `key /*: T */: value`. We look it up by
+        // the key name *before* consuming the colon, so the scanner's
+        // `last_ident = key` at the time of the `/*:` lines up.
+        let type_annotation = if let PropKey::Ident(name) = &key {
+            self.try_get_type_annotation(self.current_span(), name)
+        } else {
+            None
+        };
+
         // Regular property
         self.expect(&Token::Colon)?;
         let value = self.parse_assignment_expression()?;
@@ -1737,6 +1747,7 @@ impl Parser {
         Ok(PropDef::Property {
             key,
             value,
+            type_annotation,
             span: Span::new(start, self.prev_span().end),
         })
     }

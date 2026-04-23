@@ -265,6 +265,19 @@ These weren't in the original 14 but got addressed alongside:
   to an IIFE wrapped in `Promise.resolve`; `await e` is a unary
   operator that unwraps `Promise<T>` to `T`. `fetch` in the stdlib
   returns `Promise<Response>`.
+- **Per-field type annotations on object literals** — the inline
+  `/*: T */` form now also attaches to object property keys:
+  `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation
+  is unified with the value's inferred type and the property is
+  bound at the annotated type. Makes typed-empty-collection seeding
+  in a state object readable:
+  ```js
+  let state = {
+      todos  /*: Todo[] */: [],
+      nextId /*: Number */: 1,
+      filter /*: String */: "all"
+  };
+  ```
 
 ## SPA features used
 

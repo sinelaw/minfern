@@ -391,9 +391,33 @@ impl InferState {
 
         for prop in properties {
             match prop {
-                PropDef::Property { key, value, .. } => {
+                PropDef::Property {
+                    key,
+                    value,
+                    type_annotation,
+                    ..
+                } => {
                     let prop_name = self.prop_key_to_name(key);
-                    let prop_type = self.infer_expr(env, value)?;
+                    let value_type = self.infer_expr(env, value)?;
+                    // If the property carries an inline annotation, parse
+                    // it and unify with the value's inferred type so the
+                    // annotation is enforced the same way a variable
+                    // declaration's annotation is.
+                    let prop_type = if let Some(ann) = type_annotation {
+                        let ann_span = Span::new(ann.span.start, ann.span.end);
+                        let (annotated_type, _) = parse_type_annotation(
+                            &ann.content,
+                            ann_span,
+                            self.next_var_id(),
+                        )?;
+                        // Annotation first: it's what the user wrote, so
+                        // the error message reads as "expected <annotated>,
+                        // found <value>".
+                        self.unify(ann_span, &annotated_type, &value_type)?;
+                        self.apply_subst(&annotated_type)
+                    } else {
+                        value_type
+                    };
                     props.insert(prop_name, prop_type);
                 }
 
