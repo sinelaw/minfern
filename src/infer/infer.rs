@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use crate::error::{MinfernError, TypeError};
 use crate::lexer::Span;
 use crate::parser::ast::{
-    AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, Program, PropDef, PropKey, Stmt,
-    TypeAnnotation, UnaryOp, VarKind,
+    AssignOp, BinOp, ExportDecl, Expr, ForInLhs, ForInit, Literal, Program, PropDef, PropKey,
+    Stmt, TypeAnnotation, UnaryOp, VarKind,
 };
 
 use super::type_parser::parse_type_annotation;
@@ -1459,9 +1459,37 @@ impl InferState {
                 Ok((Type::Undefined, env.clone()))
             }
 
-            Stmt::Export { .. } => {
-                // TODO: Implement export type extraction
-                Ok((Type::Undefined, env.clone()))
+            Stmt::Export { declaration, span } => {
+                // Desugar to the underlying declaration and infer that, so
+                // `export var x = 1;` and `export function f() {}` end up
+                // in the env exactly like their un-exported counterparts.
+                // The module resolver reads the final env back out.
+                let inner = match declaration {
+                    ExportDecl::Var {
+                        kind,
+                        declarations,
+                        span,
+                    } => Stmt::Var {
+                        kind: *kind,
+                        declarations: declarations.clone(),
+                        span: *span,
+                    },
+                    ExportDecl::Function {
+                        name,
+                        params,
+                        body,
+                        type_annotation,
+                        span,
+                    } => Stmt::FunctionDecl {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
+                        type_annotation: type_annotation.clone(),
+                        span: *span,
+                    },
+                };
+                let _ = span;
+                self.infer_stmt(env, &inner)
             }
 
             Stmt::If {

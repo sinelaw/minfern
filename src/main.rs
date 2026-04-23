@@ -208,7 +208,7 @@ fn run_inference(
     state: &mut InferState,
     env: TypeEnv,
     source: &str,
-    _filename: &str,
+    filename: &str,
 ) -> Result<(), Vec<MinfernError>> {
     let mut errors = Vec::new();
 
@@ -246,6 +246,32 @@ fn run_inference(
             errors.push(e);
             return Err(errors);
         }
+    };
+
+    // Resolve any `import "./foo.js"` statements relative to the file's
+    // parent directory before inferring the program itself. For stdin
+    // (filename == "<stdin>") we skip resolution since there's no path.
+    let env = if filename != "<stdin>" {
+        let base_dir = std::path::Path::new(filename)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let mut visiting = std::collections::HashSet::new();
+        match minfern::modules::resolve_imports(
+            state,
+            env,
+            &program,
+            &base_dir,
+            &mut visiting,
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(e);
+                return Err(errors);
+            }
+        }
+    } else {
+        env
     };
 
     // Type inference
