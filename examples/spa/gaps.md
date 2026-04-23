@@ -21,8 +21,13 @@ what changed and why.
 | 10| No ergonomic way to seed an empty typed collection   | *resolved*   |
 | 11| No arrow functions                                   | *resolved*   |
 | 12| No `let`                                             | *resolved*   |
-| 13| No destructuring / spread / rest                     | open         |
-| 14| No `class`, `async`/`await`                          | open         |
+| 13| No destructuring / spread / rest                     | *resolved* (partial) |
+| 14| No `class`                                           | *resolved* (partial) |
+| 14| No `async`/`await`                                   | open         |
+| — | Inline `/*: T */` annotations not captured           | *resolved*   |
+| — | Missing Math methods (log/sin/cos/atan2/…)           | *resolved*   |
+| — | No `Object.keys`, `Array.isArray`                    | *resolved*   |
+| — | No module resolution (`import`/`export`)             | *resolved*   |
 
 ## Resolved
 
@@ -171,24 +176,71 @@ The SPA still seeds `state.todos` with two entries for illustrative
 reasons, but the annotation form works and is now mentioned in the
 comment above `state` so readers know the option is there.
 
-### 13. No destructuring / spread / rest
+### 13. No destructuring *(resolved, partial)*
 
-`let {id, text} = todo;` and `const rest = [...tail];` would simplify
-about a dozen sites in the SPA. Pure parser work but not done.
+Object and array destructuring in `var`/`let`/`const` declarations
+parses and desugars to a sequence of simple declarators sharing a
+synthesised temp binding. Covers:
 
-### 14. No `class`, `async`/`await`
+```js
+const {a, b: renamed} = obj;   // -> const $t = obj, a = $t.a, renamed = $t.b;
+const [x, y] = tuple;          // -> const $t = tuple, x = $t[0], y = $t[1];
+```
+
+Not yet covered: nested patterns (`{a: {b}}`), defaults (`{a = 1}`),
+rest (`{...xs}`, `[...tail]`), destructuring in function parameters,
+destructuring in `for`-loop heads. Spread (`[...arr]`, `{...obj}`)
+in expressions is also not done — needs more thought around typing
+heterogeneous merges.
+
+### 14a. No `class` *(resolved, partial)*
+
+`class` declarations parse and desugar in the parser to factory
+functions that return an object literal, matching the builder-pattern
+style `test_builder_pattern.js` already exercises. Methods, a
+constructor, and `new Class()` all work.
+
+Not yet covered: `extends`/`super` (would need a prototype chain),
+static methods, getters/setters in class bodies, private fields, and
+constructor statements beyond `this.FIELD = EXPR;`.
+
+### 14b. No `async`/`await`
 
 A network-backed variant would need `fetch(...).then(...)` or
-`async`/`await`. Neither parses. `fetch` itself isn't in the stdlib
-either.
+`async`/`await`. Neither parses yet. `fetch` itself isn't in the
+stdlib either, and proper support would need a `Promise<T>` type
+(a new parameterised nominal type — minfern already has the
+machinery for it via `Array<T>`, but adding it still counts as
+a meaningful change).
 
 ## What's left in priority order
 
-1. **Nullability** (gap 3) — the one open gap that actually blocks idioms
-   like `getElementById` safety, `find` results, and `JSON.parse`.
-2. **Destructuring / spread / rest** (gap 13) — pure parser work, big
-   readability win.
-3. **`async`/`await`** (gap 14) — needs a `Promise<T>` built-in plus a
-   parser arm; the rest falls out of existing generics.
-4. **Inference polish** (gaps 7, 8, 9, 10) — smaller scope but each one
+1. **Nullability** (gap 3) — the remaining open gap that blocks idioms
+   like `getElementById` safety, `find` results, and `JSON.parse`. Needs
+   a type-system extension (unions, options, or a `?T` sugar).
+2. **`async`/`await`** (gap 14b) — needs a `Promise<T>` built-in plus
+   parser arms for `async` / `await`; the rest falls out of existing
+   generics. No other blocker.
+3. **Destructuring, round 2** (gap 13 continued) — nesting, defaults,
+   rest/spread, patterns in function parameters. All pure parser work.
+4. **Inference polish** (gaps 7, 8, 9) — smaller scope but each one
    removes a footgun.
+5. **Class extras** (gap 14a continued) — `extends`, static methods,
+   getters/setters.
+
+## Additions beyond the original list
+
+These weren't in the original 14 but got addressed alongside:
+
+- **Inline `/*: T */` annotations** — scanner now captures them after
+  the most recently emitted identifier, alongside the existing
+  `/** var x: T */` doc-comment form. The form shown in `declare.md`
+  finally matches what the tool does.
+- **More Math / Object / Array static methods** — log/log2/log10, exp,
+  all trig and hyperbolic functions, trunc, sign, hypot, LN2/LN10/
+  LOG2E/LOG10E/SQRT2. Also `Object.keys` and `Array.isArray` as
+  polymorphic declarations so each call site instantiates fresh.
+- **ES6 module resolution** — `import "./foo.js"` and
+  `import { a, b as c } from "./foo.js"` now resolve relative to the
+  importing file, parse the target, infer it recursively, and merge
+  the exported bindings into the env. Cycles error out explicitly.
