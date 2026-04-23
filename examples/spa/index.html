@@ -191,6 +191,28 @@
     text-align: center;
     padding: 24px 0;
   }
+
+  .save-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }
+  .save-row button {
+    background: var(--panel-2);
+    color: var(--text);
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .save-row button:hover { background: var(--accent); color: #11111b; }
+  .save-status {
+    color: var(--muted);
+    font-size: 13px;
+    font-style: italic;
+  }
 </style>
 </head>
 <body>
@@ -216,6 +238,11 @@
     <ul id="todo-list" class="todos"></ul>
 
     <div id="footer" class="footer"></div>
+
+    <div class="save-row">
+      <button id="save-btn">Save</button>
+      <span id="save-status" class="save-status"></span>
+    </div>
   </div>
 </main>
 

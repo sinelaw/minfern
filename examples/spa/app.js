@@ -2,39 +2,46 @@
 //
 // State lives in a single plain object. Every event handler mutates that
 // state and calls `render()`, which rebuilds the list portion of the DOM
-// from an HTML string and re-attaches per-item handlers. Every object
-// shape and function type in this file is inferred by minfern — there is
-// not a single type annotation in the body of the app.
-//
-// Relies on minfern features:
-//   - Embedded stdlib: `document`, `console`, `Math`, ... come from
-//     stdlib/dom.d.js and stdlib/core.d.js auto-loaded by the checker.
-//   - Function hoisting: `render()` is defined at the bottom, called from
-//     handlers near the top, and the checker sees it fine.
-//   - Arrow functions, `let`, `const`.
-//   - `Array.prototype` and `String.prototype` methods (filter/map/
-//     forEach/some/reduce, replaceAll).
+// from an HTML string and re-attaches per-item handlers.
 //
 // To type-check:
 //     minfern examples/spa/app.js
+//
+// Features exercised (every one produced by minfern's regular inference —
+// no body annotations anywhere except the single `state` declaration):
+//   - Embedded stdlib (document, console, Math, JSON, Object, Array, ...)
+//   - Function hoisting: `render()` is defined at the bottom, called from
+//     closures created near the top.
+//   - Arrow functions, `let`, `const`.
+//   - Object destructuring in function parameters' bodies.
+//   - Inline `/*: T */` annotation on `state` to seed a typed empty
+//     collection.
+//   - Array.prototype / String.prototype built-ins (filter, map, forEach,
+//     some, reduce, replaceAll, ...).
+//   - async / await and Promise<T> for the "Save" button demo.
 
 // ---------------------------------------------------------------------------
-// State. Seeding the todos list with two entries fixes its element type to
-// {id: Number, text: String, done: Boolean} without needing annotations.
-// An explicit annotation like
-//     /** var todos: {id: Number, text: String, done: Boolean}[] */
-//     var todos = [];
-// works equivalently if you'd rather start empty.
+// State. The inline annotation pins the element type of `todos` so we can
+// start empty; without it, `todos: []` would be inferred as `a[]` until the
+// first push. The extra `todos.push(...)` calls below seed a couple of rows
+// of initial content without fighting the type.
 // ---------------------------------------------------------------------------
 
-let state = {
-    todos: [
-        {id: 1, text: "Try editing this todo list", done: false},
-        {id: 2, text: "Read examples/spa/app.js", done: true}
-    ],
-    nextId: 3,
+let state /*: {
+    todos: {id: Number, text: String, done: Boolean}[],
+    nextId: Number,
+    filter: String
+} */ = {
+    todos: [],
+    nextId: 1,
     filter: "all"
 };
+state.todos.push({id: 1, text: "Try editing this todo list", done: false});
+state.todos.push({id: 2, text: "Read examples/spa/app.js", done: true});
+state.nextId = 3;
+
+// Save counter, bumped every time the async save completes.
+let saveCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Pure helpers.
@@ -97,21 +104,22 @@ function setFilter(f) {
 // ---------------------------------------------------------------------------
 
 function renderTodoItem(todo) {
-    let liClass = todo.done ? "done" : "";
-    let toggleClass = todo.done ? "toggle on" : "toggle";
-    let toggleMark = todo.done ? "✓" : "";
+    const {id, text, done} = todo;
+    const liClass = done ? "done" : "";
+    const toggleClass = done ? "toggle on" : "toggle";
+    const toggleMark = done ? "✓" : "";
     return (
         `<li class="${liClass}">` +
-            `<button id="toggle-${todo.id}" class="${toggleClass}">${toggleMark}</button>` +
-            `<span class="text">${escapeHtml(todo.text)}</span>` +
-            `<button id="delete-${todo.id}" class="delete" title="Delete">×</button>` +
+            `<button id="toggle-${id}" class="${toggleClass}">${toggleMark}</button>` +
+            `<span class="text">${escapeHtml(text)}</span>` +
+            `<button id="delete-${id}" class="delete" title="Delete">×</button>` +
         `</li>`
     );
 }
 
 function renderList() {
-    let listEl = document.getElementById("todo-list");
-    let visible = state.todos.filter(shouldShow);
+    const listEl = document.getElementById("todo-list");
+    const visible = state.todos.filter(shouldShow);
     let html = "";
     if (visible.length === 0) {
         html = state.todos.length === 0
@@ -124,10 +132,10 @@ function renderList() {
 }
 
 function renderFooter() {
-    let footer = document.getElementById("footer");
-    let remaining = countRemaining();
-    let word = remaining === 1 ? "item" : "items";
-    let clearMarkup = hasAnyDone()
+    const footer = document.getElementById("footer");
+    const remaining = countRemaining();
+    const word = remaining === 1 ? "item" : "items";
+    const clearMarkup = hasAnyDone()
         ? `<button id="clear-done">Clear completed</button>`
         : `<span></span>`;
     footer.innerHTML = `<span>${remaining} ${word} left</span>` + clearMarkup;
@@ -144,13 +152,14 @@ function renderFilters() {
 function attachListHandlers() {
     state.todos.forEach(todo => {
         if (shouldShow(todo)) {
-            document.getElementById(`toggle-${todo.id}`).onclick = () => {
-                toggleTodo(todo.id);
+            const {id} = todo;
+            document.getElementById(`toggle-${id}`).onclick = () => {
+                toggleTodo(id);
                 render();
                 return undefined;
             };
-            document.getElementById(`delete-${todo.id}`).onclick = () => {
-                deleteTodo(todo.id);
+            document.getElementById(`delete-${id}`).onclick = () => {
+                deleteTodo(id);
                 render();
                 return undefined;
             };
@@ -174,11 +183,35 @@ function render() {
 }
 
 // ---------------------------------------------------------------------------
-// Top-level wiring: the three static elements that live for the whole session.
+// Async "save" demo. Stands in for a `fetch("/api/todos", {method: "POST"})`
+// call — we just resolve an immediate Promise so the example runs over
+// file://. The button's status label gets an intermediate "Saving..." so
+// you can see the await actually suspend the handler.
+// ---------------------------------------------------------------------------
+
+async function persistTodos() {
+    const payload = JSON.stringify(state.todos);
+    // In a real app this would be `await fetch("/api/todos", ...)`. fetch is
+    // available in the stdlib; it returns `Promise<Response>`.
+    await Promise.resolve(0);
+    return payload.length;
+}
+
+async function save() {
+    const statusEl = document.getElementById("save-status");
+    statusEl.textContent = "Saving…";
+    const bytes = await persistTodos();
+    saveCounter = saveCounter + 1;
+    statusEl.textContent = `Saved ${bytes} bytes (${saveCounter})`;
+    return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Top-level wiring: the four static elements that live for the whole session.
 // ---------------------------------------------------------------------------
 
 function submitDraft() {
-    let input = document.getElementById("new-input");
+    const input = document.getElementById("new-input");
     addTodo(input.value);
     input.value = "";
     render();
@@ -202,5 +235,13 @@ document.getElementById("new-input").onkeydown = e => {
     };
     return undefined;
 });
+
+document.getElementById("save-btn").onclick = () => {
+    // `save()` returns a Promise<Undefined>; we don't await it here since
+    // top-level await isn't something minfern enforces yet, and we don't
+    // need the result.
+    save();
+    return undefined;
+};
 
 render();

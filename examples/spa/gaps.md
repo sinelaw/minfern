@@ -260,3 +260,33 @@ These weren't in the original 14 but got addressed alongside:
   `import { a, b as c } from "./foo.js"` now resolve relative to the
   importing file, parse the target, infer it recursively, and merge
   the exported bindings into the env. Cycles error out explicitly.
+- **`Promise<T>` / `async` / `await`** — new built-in parameterised
+  nominal type (same shape as `Array<T>`). `async function` desugars
+  to an IIFE wrapped in `Promise.resolve`; `await e` is a unary
+  operator that unwraps `Promise<T>` to `T`. `fetch` in the stdlib
+  returns `Promise<Response>`.
+
+## SPA features used
+
+The example in `app.js` ended up demonstrating every feature above.
+What to look at for each:
+
+| Feature | Where in `app.js` |
+|---|---|
+| Inline annotation with typed empty seed | `let state /*: {...} */ = {todos: [], ...}` at the top |
+| Arrow functions | every event handler and `filter`/`map`/`forEach` callback |
+| `let` / `const` | everywhere |
+| String methods | `escapeHtml` (`.replaceAll` chain) |
+| Array methods | `countRemaining`, `hasAnyDone`, `deleteTodo`, `clearDone`, `renderList` |
+| Object destructuring | `renderTodoItem` (`const {id, text, done} = todo`) and the per-todo handler factory |
+| Function hoisting | every handler closes over `render()`, which is defined at the bottom |
+| Template literals | HTML string building throughout |
+| Async / await / Promise | `persistTodos` and `save` for the Save button |
+| Stdlib DOM + JSON | `document.getElementById`, `JSON.stringify` |
+
+Modules aren't used in the main SPA because Chromium blocks
+`type="module"` imports from `file://` URLs, which would make the
+example stop running without a local HTTP server. A minimal
+multi-file project demonstrating import/export lives in
+`examples/modules/` — type-check with
+`minfern examples/modules/app.js`.
