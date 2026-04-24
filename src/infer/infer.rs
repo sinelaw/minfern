@@ -131,12 +131,39 @@ impl InferState {
         let mut i = 0;
         while i < stmts.len() {
             if matches!(stmts[i], Stmt::FunctionDecl { .. }) {
+                // Extend the group across intervening empty statements:
+                // `function f() {} ; function g() {}` should still let
+                // `f` and `g` see each other (JS hoists all function
+                // declarations in a scope to the top). Without this,
+                // a stray `;` silently breaks mutual recursion.
                 let start = i;
-                while i < stmts.len() && matches!(stmts[i], Stmt::FunctionDecl { .. }) {
+                while i < stmts.len()
+                    && matches!(stmts[i], Stmt::FunctionDecl { .. } | Stmt::Empty { .. })
+                {
                     i += 1;
                 }
-                current_env = self.infer_function_group(&current_env, &stmts[start..i])?;
-            } else {
+                // Trim trailing empties so the slice handed to
+                // `infer_function_group` ends on a FunctionDecl — the
+                // group-inference routine skips empties either way, but
+                // trimming avoids pointless iteration over them.
+                let mut end = i;
+                while end > start
+                    && matches!(stmts[end - 1], Stmt::Empty { .. })
+                {
+                    end -= 1;
+                }
+                if end == start {
+                    // We only saw empties; fall through to the
+                    // regular path so each Empty is processed (sets
+                    // `result` to Undefined).
+                    i = start;
+                } else {
+                    current_env = self.infer_function_group(&current_env, &stmts[start..end])?;
+                    i = end;
+                    continue;
+                }
+            }
+            {
                 if let Stmt::Var {
                     kind: VarKind::Const,
                     declarations,

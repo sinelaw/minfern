@@ -291,10 +291,17 @@ impl InferState {
         let ty = self.apply_subst(ty);
         let ty_vars = ty.free_vars();
 
-        let gen_vars: Vec<TVarName> = ty_vars
+        // Sort by TVarName id so the scheme's quantification order is
+        // deterministic. `ty.free_vars()` returns a HashSet, whose
+        // iteration order isn't stable even within a process — each
+        // HashSet is seeded independently — which would otherwise make
+        // the printed scheme `<a, b>...` non-deterministically map
+        // letters to type-var slots across runs.
+        let mut gen_vars: Vec<TVarName> = ty_vars
             .into_iter()
             .filter(|v| !env_free_vars.contains(v) && v.is_flex())
             .collect();
+        gen_vars.sort_by_key(|v| v.id());
 
         if gen_vars.is_empty() {
             TypeScheme::mono(ty)
