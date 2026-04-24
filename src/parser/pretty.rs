@@ -67,8 +67,15 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             type_annotation,
             ..
         } => {
-            // For function expressions with type annotations, output inline
-            // since they can appear in expression context
+            // In expression contexts that need to start with a token
+            // other than `function` (call callees, member targets,
+            // etc.), the function expression must be parenthesised —
+            // otherwise at statement position `function() {...}()` is
+            // parsed as a function *declaration* followed by `()`,
+            // which fails with "missing name".
+            if needs_parens {
+                write!(w, "(")?;
+            }
             write!(w, "function")?;
             if let Some(n) = name {
                 write!(w, " {}", n)?;
@@ -85,7 +92,11 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
                 write!(w, " /** function {}{} */", name.as_deref().unwrap_or(""), ann.content)?;
             }
             write!(w, " ")?;
-            write_stmt(w, body, 0)
+            write_stmt(w, body, 0)?;
+            if needs_parens {
+                write!(w, ")")?;
+            }
+            Ok(())
         }
 
         Expr::Member {
