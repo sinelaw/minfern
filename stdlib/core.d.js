@@ -5,11 +5,16 @@
 // by any JavaScript runtime, so it freely uses `const x;` without an
 // initializer (a SyntaxError in real JS) to express external bindings.
 //
-// Only non-polymorphic bindings live here. Truly polymorphic ones (Array,
-// String, Number, Boolean constructors, JSON) stay in Rust so that each
+// The polymorphic primitive constructors (`Array`, `String`, `Number`,
+// `Boolean` used as functions) stay in Rust (`src/builtins/mod.rs`) so each
 // lookup produces fresh type variables — minfern's handling of polymorphic
 // types inside annotation-declared schemes doesn't yet re-instantiate on
-// every use.
+// every use. Library-shaped bindings (Math, console, JSON, Object, Array
+// statics, Promise helpers, parseInt/Float, isNaN/Finite) live here.
+// Bindings declared with type variables in this file (`JSON.parse`,
+// `Object.keys`, `Promise.resolve`, etc.) share that variable across every
+// call site rather than instantiating fresh — see the per-binding notes
+// below for the consequences.
 
 /** const console: {log: (T) => Undefined, error: (T) => Undefined, warn: (T) => Undefined} */
 const console;

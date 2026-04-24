@@ -23,11 +23,11 @@ Following HMF conventions, we distinguish between different categories of types:
 σ ::= ∀α. σ | ρ                     (type schemes / polymorphic types)
 ρ ::= τ | σ → σ | {r} | [σ] | Map σ (unquantified types)
 τ ::= α | c                         (monomorphic types)
-c ::= Number | String | Boolean | Regex | Undefined | Null | Date  (primitive types)
+c ::= Number | String | Boolean | Regex | Undefined | Null  (primitive types)
 r ::= l: σ, r | α | ∅               (row types)
 ```
 
-- **Primitive Types**: `Number`, `String`, `Boolean`, `Regex`, `Undefined`, `Null`, `Date`.
+- **Primitive Types**: `Number`, `String`, `Boolean`, `Regex`, `Undefined`, `Null`.
 - **Type Variables**: `α, β, ...` represent unknown types to be determined by inference.
 - **Function Types**: `σ₁ → σ₂`, or `(σ₁, σ₂, ..., σₙ) → σ` for multi-argument functions.
 - **Row Types**: `{l₁: σ₁, l₂: σ₂, ..., lₙ: σₙ | ρ}` represent objects with properties `lᵢ` of type `σᵢ`. `ρ` is a row variable, making the row open for extension. A closed row has `∅` (empty) in place of `ρ`.
