@@ -4,7 +4,7 @@ Type checker with full type inference for a subset of JavaScript.
 
 Try it online at: https://sinelaw.github.io/minfern/
 
-Based on the type system developed for [infernu](https://github.com/sinelaw/infernu). See [infernu.md](infernu.md) for a partial formalization (incomplete: doesn't cover `this` resolution, rank restrictions on object properties, or value restriction).
+Based on the type system developed for [infernu](https://github.com/sinelaw/infernu). See [infernu.md](infernu.md) for a partial formalization. The implementation also covers `this` resolution, Rank-1 restrictions on type annotations, and a value restriction for generalisation and polymorphic-property mutation; the formal document doesn't go into these.
 
 
 The JavaScript checked by minfern is just JavaScript and can be run by browsers or any other runtime, or even embedded engines. See [mquickjs](https://github.com/bellard/mquickjs) which is a runtime that also supports a subset of JavaScript.
@@ -88,11 +88,13 @@ TLDR: Everything must have a specific type. An object can't sometimes have a val
 
 ## Supported Syntax
 
-Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `import`/`export` (parsed only - modules not resolved).
+Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `let` (treated as `var` — block scoping isn't modelled), arrow functions, destructuring (object and array, desugared at parse time), `class` declarations (desugared into factory functions; no inheritance, no static members), `async`/`await` (desugared via `Promise.resolve`), and `import`/`export` with file-system-based module resolution.
+
+Type annotations are accepted in two forms: inline `var x /*: T */` and doc-comment `/** var x: T */`. See [declare.md](declare.md) for the rules around external declarations and Rank-1 polymorphism.
 
 ## Future Work
 
 Some of the limitations above are annoying and may be worth supporting in some way or form. It would be nice to support nullable/optional-style union types, or explicit sum types. It would require some work to avoid losing the principal typing property (every expression has a single unambiguous most general type).
 
-Not yet supported: import resolution, arrow functions, `let`, `class`, destructuring, spread/rest, `async`/`await`.
+Not yet supported: spread/rest parameters, class inheritance, static class members.
 

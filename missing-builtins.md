@@ -1,105 +1,122 @@
-# Missing JavaScript Built-in Methods and Properties
+# JavaScript Built-in Coverage
 
-Found while running minfern on the [depflame](https://github.com/example/depflame) JavaScript codebase. These are standard JavaScript built-in methods that real-world code commonly uses but minfern doesn't currently know about.
+Status of standard JavaScript built-ins minfern knows about. The original
+version of this document was a wishlist written while running minfern
+against the [depflame](https://github.com/example/depflame) codebase; most
+of those gaps have since been filled in. What's left is genuinely missing
+or deliberately out of scope.
 
-## String methods
+`String` and `Array` prototype methods are looked up by `src/builtins/mod.rs`
+(`string_method_type`, `array_method_type`, `promise_method_type`). Library
+objects like `Math`, `console`, `JSON`, `Object`, `Array` (statics) and
+`Promise` are declared in `stdlib/core.d.js`, which is auto-loaded before
+every program (use `--no-stdlib` to skip it). Browser globals live in
+`stdlib/dom.d.js`, also auto-loaded.
 
-minfern knows `String.length` but no String methods at all. Calling any method on a string literal causes a type mismatch (`expected 'String', found '{methodName: ...}'`) because minfern infers the object has a structural `.methodName` property rather than recognizing it as a built-in String method.
+## String prototype
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `indexOf` | `(String) => Number` | Most common — used for substring search |
-| `substring` | `(Number, Number) => String` | |
-| `substr` | `(Number, Number) => String` | Legacy but widely used |
-| `slice` | `(Number, Number) => String` | |
-| `split` | `(String) => String[]` | |
-| `trim` | `() => String` | |
-| `replace` | `(String, String) => String` | Simplified; full JS also accepts RegExp |
-| `toUpperCase` | `() => String` | |
-| `toLowerCase` | `() => String` | |
-| `charAt` | `(Number) => String` | |
-| `charCodeAt` | `(Number) => Number` | |
-| `startsWith` | `(String) => Boolean` | ES6 |
-| `endsWith` | `(String) => Boolean` | ES6 |
-| `includes` | `(String) => Boolean` | ES6 |
-| `repeat` | `(Number) => String` | ES6 |
-| `padStart` | `(Number, String) => String` | ES2017 |
+Implemented (`src/builtins/mod.rs::string_method_type`):
 
-## Array methods
+`indexOf`, `lastIndexOf`, `substring`, `substr`, `slice`, `split`, `trim`,
+`trimStart`, `trimEnd`, `replace`, `replaceAll`, `toUpperCase`, `toLowerCase`,
+`charAt`, `charCodeAt`, `startsWith`, `endsWith`, `includes`, `repeat`,
+`padStart`, `padEnd`, `concat`, `toString`, plus the `length` property.
 
-minfern knows `Array.length` and `[]` indexing but no Array methods. Calling any method gives `Property 'X' not found in type T[]`.
+`replace` / `replaceAll` only accept a `String` first argument; the regex
+overloads from the JS spec aren't modelled because there's no union type.
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `push` | `(T) => Number` | Mutating; returns new length |
-| `pop` | `() => T` | Mutating |
-| `indexOf` | `(T) => Number` | |
-| `slice` | `(Number, Number) => T[]` | Non-mutating copy |
-| `join` | `(String) => String` | |
-| `concat` | `(T[]) => T[]` | |
-| `reverse` | `() => T[]` | Mutating |
-| `sort` | `() => T[]` | Mutating (could also take comparator) |
-| `map` | `((T) => U) => U[]` | Higher-order |
-| `filter` | `((T) => Boolean) => T[]` | Higher-order |
-| `forEach` | `((T) => void) => void` | Higher-order |
-| `reduce` | `((U, T) => U, U) => U` | Higher-order |
-| `some` | `((T) => Boolean) => Boolean` | Higher-order |
-| `every` | `((T) => Boolean) => Boolean` | Higher-order |
-| `find` | `((T) => Boolean) => T` | ES6; returns T or undefined |
-| `includes` | `(T) => Boolean` | ES6 |
-| `fill` | `(T) => T[]` | ES6; also `new Array(n).fill(v)` pattern |
+## Array prototype
 
-## Math methods
+Implemented (`src/builtins/mod.rs::array_method_type`):
 
-minfern knows: `abs`, `ceil`, `floor`, `max`, `min`, `pow`, `random`, `round`, `sqrt`, `E`, `PI`.
+`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`,
+`slice`, `concat`, `join`, `reverse`, `sort`, `fill`, `find`, `findIndex`,
+`forEach`, `filter`, `some`, `every`, `map`, `reduce`, `reduceRight`,
+`toString`, plus the `length` property and `[]` indexing.
 
-Missing:
+`map` and `reduce`/`reduceRight` are polymorphic: each call freshens the
+result element type / accumulator type.
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `log` | `(Number) => Number` | Natural logarithm — very common |
-| `log2` | `(Number) => Number` | |
-| `log10` | `(Number) => Number` | |
-| `exp` | `(Number) => Number` | |
-| `sin` | `(Number) => Number` | |
-| `cos` | `(Number) => Number` | |
-| `tan` | `(Number) => Number` | |
-| `atan2` | `(Number, Number) => Number` | |
-| `trunc` | `(Number) => Number` | ES6 |
-| `sign` | `(Number) => Number` | ES6 |
-| `hypot` | `(Number, Number) => Number` | ES6 |
+`find` returns `T`, not `T | undefined` — there's no union type, so a
+`find` that doesn't match returns garbage at runtime. Same caveat as the
+rest of the "no nullable" trade-offs in the README.
 
-## Object static methods
+`sort` doesn't take a comparator yet.
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `Object.keys` | `(Object) => String[]` | Very common; minfern sees `.keys` as a structural property |
-| `Array.isArray` | `(any) => Boolean` | Same issue |
+## Promise prototype
 
-## Already working
+Implemented (`src/builtins/mod.rs::promise_method_type`):
 
-These work correctly:
+`then`, `catch`, `finally`. `then` requires the callback to return a
+`Promise<U>` (rather than a plain value or a promise) because minfern has
+no union types; pass a plain value through `Promise.resolve(v)`.
 
-- `JSON.stringify`, `JSON.parse`
-- `parseInt`, `parseFloat`
-- `isNaN`, `isFinite`
-- `Number()`, `String()` (type coercion)
-- `Math.abs`, `Math.ceil`, `Math.floor`, `Math.max`, `Math.min`, `Math.pow`, `Math.random`, `Math.round`, `Math.sqrt`
-- `Math.E`, `Math.PI`
-- `String.length`, `Array.length`, `Array[]` indexing
+Constructor helpers `Promise.resolve`, `Promise.reject`, `Promise.all` are
+declared in `stdlib/core.d.js`.
 
-## Impact on real-world code
+## Math
 
-The depflame codebase (~1600 lines of JS) uses these patterns heavily:
-- `str.indexOf(x)` for substring checks (feature resolution, dep parsing)
-- `str.split('/')` for parsing `"child/feature"` entries
-- `str.substring(4)` for extracting dep names from `"dep:foo"`
-- `Math.log(x)` for logarithmic color scaling in the flamegraph
-- `[].push()`, `[].slice()` for array manipulation throughout
-- `Object.keys(obj)` for iterating over feature maps
+Declared in `stdlib/core.d.js`:
 
-Without String and Array methods, most real-world JavaScript cannot be checked.
+Constants: `PI`, `E`, `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT2`.
 
-## Stack overflow on recursive array types
+Functions: `abs`, `floor`, `ceil`, `round`, `trunc`, `sign`, `sqrt`,
+`cbrt`, `pow`, `min`, `max`, `hypot`, `log`, `log2`, `log10`, `exp`,
+`expm1`, `log1p`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+`sinh`, `cosh`, `tanh`, `random`, `imul`, `fround`, `clz32`.
 
-Additionally, minfern stack-overflows on some patterns involving arrays that reference themselves through functions (e.g., a function that takes an array, copies it, and adds elements). This may be a bug in the recursive type handling rather than a missing feature.
+`min`/`max`/`hypot` are arity-2; the variadic spec form isn't supported
+(no rest params).
+
+## Object / Array statics
+
+Declared in `stdlib/core.d.js`: `Object.keys` (returns `String[]`),
+`Array.isArray`. Both shadow the bare `Object` / `Array` constructors that
+live in the Rust env, which means `new Object()` and `new Array()` no
+longer type-check — use `{}` / `[]` literals.
+
+Other statics (`Object.values`, `Object.entries`, `Object.assign`,
+`Array.from`, `Array.of`) are not declared yet.
+
+## Global functions
+
+Declared in `stdlib/core.d.js`: `parseInt`, `parseFloat`, `isNaN`,
+`isFinite`. The constructor-style coercions `Number(x)`, `String(x)`,
+`Boolean(x)` are polymorphic in the Rust env (`src/builtins/mod.rs::initial_env`).
+
+`JSON.parse` and `JSON.stringify` are declared in `stdlib/core.d.js`. The
+same `T` is shared between them inside the annotation, so a round-trip
+`JSON.stringify(JSON.parse(s))` threads a consistent type — but `T`
+is **not** re-instantiated per call site, so two unrelated `JSON.parse`s
+in the same program will be unified together. This is a known wart of
+declared (vs. Rust-built) polymorphic bindings.
+
+## Browser DOM (auto-loaded)
+
+`stdlib/dom.d.js` declares a small subset: `document` (with
+`getElementById`, `createElement`, `title`, `location`), `window`
+(`innerWidth`, `innerHeight`), `setTimeout`, `setInterval`,
+`clearTimeout`, `clearInterval`, `alert`, and `fetch` (returning a
+`Promise<Response>` with `status`, `ok`, `json()`, `text()`).
+
+Because there's no union type, `getElementById` and `createElement` both
+return the same generic "element" shape — an `HTMLInputElement` and an
+`HTMLDivElement` aren't distinguishable at the type level.
+
+## Genuinely missing / out of scope
+
+- Variadic functions (`Math.min(a, b, c, ...)`, `console.log(a, b, c)`):
+  there are no rest parameters yet.
+- `Date`, `RegExp` constructor, `Error`, `Map`/`Set` collection types
+  (the `Map<T>` *type* exists for object-as-string-dictionary patterns,
+  but the JS `Map` constructor isn't declared).
+- Iterators / generators / `Symbol` / `for await`.
+- Anything that returns `T | undefined` (`Array.prototype.find`,
+  `Map.prototype.get`, `Object.prototype.hasOwnProperty` style guards):
+  the type is forced to a single shape.
+
+## Known bugs
+
+- Some recursive patterns involving an array referenced by a function that
+  rebuilds it can stack-overflow during inference. Last reproduced against
+  depflame; not investigated since.
