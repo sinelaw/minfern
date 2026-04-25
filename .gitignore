@@ -1,1 +1,4 @@
 /target
+
+# Lean / Lake build artefacts
+/formal/.lake/

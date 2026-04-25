@@ -1,0 +1,6 @@
+name = "FormalJSTypes"
+version = "0.1.0"
+defaultTargets = ["FormalJSTypes"]
+
+[[lean_lib]]
+name = "FormalJSTypes"
