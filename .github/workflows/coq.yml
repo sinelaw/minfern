@@ -1,0 +1,26 @@
+name: Coq proofs
+
+on:
+  push:
+    paths:
+      - 'formal/coq/**'
+      - 'check_proofs.sh'
+      - '.github/workflows/coq.yml'
+  pull_request:
+    paths:
+      - 'formal/coq/**'
+      - 'check_proofs.sh'
+      - '.github/workflows/coq.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Coq
+        run: sudo apt-get update && sudo apt-get install -y coq
+      - name: Print Coq version
+        run: coqc --version
+      - name: Verify proofs
+        run: ./check_proofs.sh

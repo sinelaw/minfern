@@ -1,0 +1,18 @@
+-Q theories FormalMinfern
+
+-arg -w -arg -notation-overridden
+-arg -w -arg -deprecated-hint-without-locality
+-arg -w -arg -ambiguous-paths
+
+theories/Prelude.v
+theories/Syntax.v
+theories/Levels.v
+theories/Rows.v
+theories/Recursive.v
+theories/Classes.v
+theories/Heap.v
+theories/Inference.v
+theories/Surface.v
+theories/Equivalence.v
+theories/Soundness.v
+theories/Completeness.v

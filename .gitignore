@@ -1,1 +1,13 @@
 /target
+
+# Coq build artefacts
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.*.aux
+.lia.cache
+formal/coq/Makefile.coq
+formal/coq/Makefile.coq.conf
+formal/coq/.Makefile.coq.d
